@@ -147,3 +147,5 @@ Thumbs.db
 *~
 # JetBrains IDEs
 .idea/
+
+.spotify-tokens-dev.json
