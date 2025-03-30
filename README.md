@@ -1,6 +1,9 @@
 # Spotify Authentication Server
 
-This script provides a complete solution for authenticating with Spotify's API using the Authorization Code flow. It sets up an Express server to handle the OAuth 2.0 redirect process, automatically opens a browser for authentication, and securely stores the resulting tokens.
+This typescript/node application is designed to facilitate the authentication process with Spotify's API using the Authorization Code flow. It provides a simple way to obtain access and refresh tokens, which can be used to make authorized requests to Spotify's endpoints.
+As a standalone application, it can be run locally or deployed to a server, making it versatile for various use cases. But it is of limited use alone, and should be integrated into a larger application to be useful.
+
+![Spotify Success](.github/resources/images/spotify_success.png)
 
 ## Features
 

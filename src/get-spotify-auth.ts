@@ -15,9 +15,12 @@ interface SpotifyAuthConfig {
   redirectUri: string;
   scopes: string;
   port: number;
+  isProduction: boolean;
 }
 
 // --- Configuration ---
+const isProduction = process.env.NODE_ENV === "production";
+
 const config: SpotifyAuthConfig = {
   // Get Client ID from environment variables
   clientId: process.env.SPOTIFY_CLIENT_ID ?? "",
@@ -25,10 +28,11 @@ const config: SpotifyAuthConfig = {
   // Get Client Secret from environment variables
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET ?? "",
 
-  // Use the localhost redirect URI instead of the production one
-  // This is the key change - using the first URL in the list (localhost) instead of the second (production)
+  // Use the appropriate redirect URI based on environment
   redirectUri:
-    (process.env.SPOTIFY_REDIRECT_URLS || "").split(",")[0]?.trim() ?? "",
+    (process.env.SPOTIFY_REDIRECT_URLS || "")
+      .split(",")
+      [isProduction ? 1 : 0]?.trim() ?? "",
 
   // Define the scopes (permissions) needed
   scopes:
@@ -36,6 +40,9 @@ const config: SpotifyAuthConfig = {
 
   // Server port
   port: parseInt(process.env.PORT ?? "3030", 10),
+
+  // Production mode flag
+  isProduction,
 };
 
 // --- Helper Functions ---
@@ -76,7 +83,11 @@ function cleanupState(): void {
 
 // --- Main Function ---
 async function startSpotifyAuthServer(): Promise<void> {
-  console.log("--- Spotify Token Server (Authorization Code Flow) ---");
+  console.log(
+    `--- Spotify Token Server (${
+      config.isProduction ? "PRODUCTION" : "DEVELOPMENT"
+    } Mode) ---`
+  );
 
   // Validation checks
   if (!config.clientId) {
@@ -287,12 +298,15 @@ async function startSpotifyAuthServer(): Promise<void> {
       );
 
       // Save tokens to a file for easy access
+      const tokensFilename = config.isProduction
+        ? "spotify-tokens-prod.json"
+        : "spotify-tokens-dev.json";
       fs.writeFileSync(
-        "spotify-tokens.json",
+        tokensFilename,
         JSON.stringify(tokenData, null, 2),
         "utf8"
       );
-      console.log("\nTokens have been saved to spotify-tokens.json");
+      console.log(`\nTokens have been saved to ${tokensFilename}`);
     } catch (error) {
       console.error("Error exchanging code for token:", error);
       res
@@ -310,10 +324,17 @@ async function startSpotifyAuthServer(): Promise<void> {
   const server = app.listen(config.port, () => {
     serverStarted = true;
     console.log(`\nServer is running on http://localhost:${config.port}`);
-    console.log("Opening browser to start authentication flow...");
 
-    // Open browser to start the flow
-    open(`http://localhost:${config.port}/login`);
+    // In production, just show the URL, don't automatically open browser
+    if (config.isProduction) {
+      console.log(
+        `\nPlease navigate to http://localhost:${config.port}/login to start the authentication flow.`
+      );
+    } else {
+      console.log("Opening browser to start authentication flow...");
+      // Open browser to start the flow (only in development)
+      open(`http://localhost:${config.port}/login`);
+    }
 
     console.log("\nWaiting for authentication to complete...");
   });
