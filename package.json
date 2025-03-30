@@ -1,6 +1,6 @@
 {
   "name": "spotify-webview-auth",
-  "version": "1.0.0",
+  "version": "0.3.1",
   "description": "Web application to view Spotify playlists using Spotify API",
   "main": "dist/src/index.js",
   "scripts": {
@@ -15,7 +15,12 @@
     "pm2:delete": "pm2 delete ecosystem.config.js",
     "pm2:logs": "pm2 logs spotify-playlist-viewer",
     "pm2:monitor": "pm2 monit",
-    "production": "npm run build && npm run pm2:start"
+    "production": "npm run build && npm run pm2:start",
+    "bumpversion": "npm version patch",
+    "bumpversion:minor": "npm version minor",
+    "bumpversion:major": "npm version major",
+    "bumpversion:prerelease": "npm version prerelease",
+    "bumpversion:prepatch": "npm version prepatch"
   },
   "dependencies": {
     "dotenv": "^16.4.1",
