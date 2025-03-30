@@ -1,0 +1,7 @@
+spotify-authentication-server/
+├── package.json
+├── tsconfig.json
+├── scripts/
+│   └── get-spotify-auth.ts
+├── .env
+└── node_modules/

@@ -1,0 +1,23 @@
+{
+  "name": "spotify-auth-server",
+  "version": "1.0.0",
+  "description": "Spotify authentication server with Express",
+  "main": "dist/src/get-spotify-auth.js",
+  "scripts": {
+    "start": "ts-node src/get-spotify-auth.ts",
+    "build": "tsc",
+    "dev": "nodemon --exec ts-node src/get-spotify-auth.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "open": "^9.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.17.28",
+    "nodemon": "^3.1.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.2"
+  }
+}
