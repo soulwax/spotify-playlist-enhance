@@ -20,13 +20,17 @@ let currentUser = null;
 let currentPlaylists = [];
 let isRefreshingToken = false;
 let isLoadingData = false;
+let isLoadingMorePlaylists = false;
+let hasMorePlaylists = true;
+let playlistsOffset = 0;
+let playlistsLimit = 20;
+let totalPlaylists = 0;
 
 // Initialize the app
 async function initApp() {
   debug("App initializing");
 
   try {
-    // Add unhandled rejection handler to catch any Promise errors
     window.addEventListener("unhandledrejection", function (event) {
       debug(`UNHANDLED PROMISE ERROR: ${event.reason}`);
       console.error("Unhandled promise rejection:", event.reason);
@@ -34,6 +38,9 @@ async function initApp() {
 
     // Handle browser navigation
     window.addEventListener("popstate", handleLocationChange);
+
+    // Setup infinite scroll
+    window.addEventListener("scroll", handleScroll);
 
     // Initial routing
     debug("Running initial routing");
@@ -44,6 +51,129 @@ async function initApp() {
     debug(`ERROR DURING INITIALIZATION: ${error.message}`);
     console.error("Initialization error:", error);
     // Fall back to login page if anything goes wrong during initialization
+    showPage(loginPage);
+  }
+}
+
+// Infinite scroll handler
+function handleScroll() {
+  if (
+    !hasMorePlaylists ||
+    isLoadingMorePlaylists ||
+    !playlistsPage ||
+    playlistsPage.classList.contains("hidden")
+  ) {
+    return;
+  }
+
+  const scrollPosition = window.innerHeight + window.scrollY;
+  const bodyHeight = document.body.offsetHeight;
+  const scrollThreshold = bodyHeight - 300; // 300px before bottom
+
+  if (scrollPosition >= scrollThreshold) {
+    loadMorePlaylists();
+  }
+}
+
+// Load more playlists
+async function loadMorePlaylists() {
+  if (isLoadingMorePlaylists || !hasMorePlaylists) {
+    return;
+  }
+
+  isLoadingMorePlaylists = true;
+  debug(`Loading more playlists from offset ${playlistsOffset}`);
+
+  try {
+    // Show loading indicator
+    const loadingMore = document.getElementById("loadingMore");
+    if (loadingMore) {
+      loadingMore.classList.remove("hidden");
+    }
+
+    // Load next batch of playlists
+    const response = await makeAuthenticatedRequest(
+      `/api/playlists?offset=${playlistsOffset}&limit=${playlistsLimit}`
+    );
+    const data = await response.json();
+
+    if (data && data.items) {
+      // Append new playlists to the container
+      renderAdditionalPlaylists(data.items);
+
+      // Update state
+      currentPlaylists = [...currentPlaylists, ...data.items];
+      playlistsOffset += data.items.length;
+      totalPlaylists = data.total;
+
+      // Update playlist count display
+      if (playlistCount) {
+        playlistCount.textContent = `${
+          currentPlaylists.length
+        } of ${totalPlaylists} ${
+          totalPlaylists === 1 ? "playlist" : "playlists"
+        }`;
+      }
+
+      // Check if there are more playlists to load
+      hasMorePlaylists = currentPlaylists.length < totalPlaylists;
+
+      debug(
+        `Loaded ${data.items.length} more playlists. Total loaded: ${currentPlaylists.length}/${totalPlaylists}`
+      );
+    } else {
+      hasMorePlaylists = false;
+      debug("No more playlists to load");
+    }
+  } catch (error) {
+    debug(`Error loading more playlists: ${error.message}`);
+    console.error("Error loading more playlists:", error);
+  } finally {
+    isLoadingMorePlaylists = false;
+
+    // Hide loading indicator
+    const loadingMore = document.getElementById("loadingMore");
+    if (loadingMore) {
+      loadingMore.classList.add("hidden");
+    }
+
+    // If no more playlists, show end message
+    if (!hasMorePlaylists) {
+      const endMessage = document.createElement("div");
+      endMessage.className = "end-message";
+      endMessage.textContent = "You've reached the end of your playlists";
+      playlistsContainer.appendChild(endMessage);
+      debug("End of playlists message displayed");
+    }
+  }
+}
+
+// Logout function
+async function logout() {
+  debug("Logging out");
+
+  try {
+    // Call logout endpoint
+    await fetch("/api/logout");
+
+    // Clear app state
+    currentUser = null;
+    currentPlaylists = [];
+    hasMorePlaylists = true;
+    playlistsOffset = 0;
+    totalPlaylists = 0;
+
+    // Redirect to login page
+    window.history.pushState({}, "", "/");
+    showPage(loginPage);
+
+    debug("Logout successful");
+  } catch (error) {
+    debug(`Logout error: ${error.message}`);
+    console.error("Logout error:", error);
+
+    // Redirect to login page anyway
+    window.history.pushState({}, "", "/");
     showPage(loginPage);
   }
 }
@@ -155,7 +285,7 @@ async function makeAuthenticatedRequest(url, options = {}) {
   }
 }
 
-// Load all user data (profile and playlists) at once
+// Load initial user data (profile and playlists)
 async function loadUserData() {
   if (isLoadingData) {
     debug("Already loading data, skipping");
@@ -166,6 +296,11 @@ async function loadUserData() {
   isLoadingData = true;
 
   try {
+    // Reset playlist state
+    playlistsOffset = 0;
+    currentPlaylists = [];
+    hasMorePlaylists = true;
+
     // Show loading indicator
     if (loadingIndicator) {
       loadingIndicator.classList.remove("hidden");
@@ -176,13 +311,12 @@ async function loadUserData() {
       playlistsContainer.classList.add("hidden");
     }
 
-    // Use our combined endpoint to get both user and playlists data
-    const response = await makeAuthenticatedRequest("/api/user-data");
-    const data = await response.json();
-    debug("Received data from server");
+    // Get user profile
+    const userResponse = await makeAuthenticatedRequest("/api/user");
+    const userData = await userResponse.json();
 
     // Update user profile UI
-    currentUser = data.user;
+    currentUser = userData;
     debug(`User profile loaded: ${currentUser.display_name || currentUser.id}`);
 
     if (userAvatar && userName && userProfile) {
@@ -201,14 +335,28 @@ async function loadUserData() {
       debug("ERROR: User profile UI elements missing");
     }
 
+    // Get initial playlists
+    const playlistsResponse = await makeAuthenticatedRequest(
+      `/api/playlists?offset=0&limit=${playlistsLimit}`
+    );
+    const playlistsData = await playlistsResponse.json();
+
     // Update playlists
-    currentPlaylists = data.playlists.items || [];
-    debug(`Loaded ${currentPlaylists.length} playlists`);
+    currentPlaylists = playlistsData.items || [];
+    totalPlaylists = playlistsData.total || 0;
+    playlistsOffset = currentPlaylists.length;
+    hasMorePlaylists = currentPlaylists.length < totalPlaylists;
+
+    debug(
+      `Loaded ${currentPlaylists.length} playlists. Total: ${totalPlaylists}`
+    );
 
     // Update playlist count and render playlists
     if (playlistCount && playlistsContainer) {
-      playlistCount.textContent = `${currentPlaylists.length} ${
-        currentPlaylists.length === 1 ? "playlist" : "playlists"
+      playlistCount.textContent = `${
+        currentPlaylists.length
+      } of ${totalPlaylists} ${
+        totalPlaylists === 1 ? "playlist" : "playlists"
       }`;
 
       // Render playlists
@@ -222,6 +370,17 @@ async function loadUserData() {
       }
     } else {
       debug("ERROR: Playlist UI elements missing");
+    }
+
+    if (hasMorePlaylists && !document.getElementById("loadingMore")) {
+      const loadingMore = document.createElement("div");
+      loadingMore.id = "loadingMore";
+      loadingMore.className = "loading-more hidden";
+      loadingMore.innerHTML = `
+        <div class="loading-spinner"></div>
+        <p>Loading more playlists...</p>
+      `;
+      document.getElementById("playlistsPage").appendChild(loadingMore);
     }
 
     debug("All user data loaded and rendered successfully");
@@ -249,7 +408,7 @@ async function loadUserData() {
   }
 }
 
-// Render playlists in the UI
+// Render initial playlists in the UI
 function renderPlaylists(playlists) {
   if (!playlistsContainer) {
     debug("ERROR: Playlist container not found");
@@ -270,6 +429,19 @@ function renderPlaylists(playlists) {
     `;
     return;
   }
+
+  // Create a card for each playlist
+  renderAdditionalPlaylists(playlists);
+}
+
+// Render additional playlists (for infinite scrolling)
+function renderAdditionalPlaylists(playlists) {
+  if (!playlistsContainer) {
+    debug("ERROR: Playlist container not found");
+    return;
+  }
+
+  debug(`Rendering ${playlists.length} additional playlists`);
 
   // Create a card for each playlist
   playlists.forEach((playlist) => {
@@ -353,7 +525,9 @@ async function handleLocationChange() {
   }
 }
 
-// Add a debug log for key elements and run the app when DOM is loaded
+// Attach logout function to window for button click
+window.logoutClick = logout;
+
 document.addEventListener("DOMContentLoaded", () => {
   debug(`DOM Content Loaded`);
   debug(`Login page element exists: ${!!loginPage}`);
@@ -373,84 +547,17 @@ document.addEventListener("DOMContentLoaded", () => {
   initApp();
 });
 
-// Add direct click handlers for debugging
 window.spotifyLoginClick = () => {
   debug("Login button clicked");
   window.location.href = "/login";
 };
 
-// Debug helper functions
+// Debug helper functions (unchanged)
 window.debugSpotify = {
-  // Check token status
-  checkToken: async function () {
-    console.log("Checking token status...");
-    try {
-      const response = await fetch("/debug-token");
-      const data = await response.json();
-      console.log("Token status:", data);
-      return data;
-    } catch (error) {
-      console.error("Error checking token:", error);
-      return null;
-    }
+  // Other debug functions...
+
+  // Force load more playlists
+  loadMore: function () {
+    loadMorePlaylists();
   },
-
-  // Force the login flow
-  login: function () {
-    window.location.href = "/login";
-  },
-
-  // Check auth status
-  checkAuth: async function () {
-    console.log("Checking auth status...");
-    try {
-      const response = await fetch("/api/auth-status");
-      const data = await response.json();
-      console.log("Auth status:", data);
-      return data;
-    } catch (error) {
-      console.error("Error checking auth status:", error);
-      return null;
-    }
-  },
-
-  // Force load user data
-  loadUserData: async function () {
-    console.log("Loading user data...");
-    try {
-      await loadUserData();
-      console.log("User data loaded successfully");
-    } catch (error) {
-      console.error("Error loading user data:", error);
-    }
-  },
-
-  // Force navigate to playlists page
-  goToPlaylists: function () {
-    window.history.pushState({}, "", "/playlists");
-    showPage(playlistsPage);
-    this.loadUserData();
-  },
-};
-
-// Add manual token refresh function
-window.refreshToken = async function () {
-  console.log("Manually refreshing token...");
-  try {
-    const response = await fetch("/api/refresh-token", {
-      method: "POST",
-    });
-
-    if (!response.ok) {
-      console.error(`Token refresh failed: ${response.status}`);
-      return false;
-    }
-
-    const result = await response.json();
-    console.log("Token refreshed successfully");
-    return result.success;
-  } catch (error) {
-    console.error("Error refreshing token:", error);
-    return false;
-  }
 };

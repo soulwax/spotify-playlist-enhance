@@ -109,7 +109,6 @@ async function startServer(): Promise<void> {
 
   const app = express();
 
-  // Add request logging middleware
   app.use(requestLogger);
 
   // Serve static files from the public directory
@@ -582,6 +581,74 @@ async function startServer(): Promise<void> {
           error: errorMessage,
           message: "Server error while checking token",
         });
+      }
+    });
+
+    // Logout endpoint
+    app.get("/api/logout", (req: Request, res: Response) => {
+      try {
+        const tokensFilename = config.isProduction
+          ? ".spotify-tokens-prod.json"
+          : ".spotify-tokens-dev.json";
+
+        // Check if the token file exists
+        if (fs.existsSync(tokensFilename)) {
+          // Delete the token file
+          fs.unlinkSync(tokensFilename);
+          console.log(`Token file ${tokensFilename} deleted successfully`);
+        }
+
+        // Send a success response
+        res.json({ success: true, message: "Logged out successfully" });
+      } catch (error) {
+        console.error("Error during logout:", error);
+        res.status(500).json({ error: "Server error during logout" });
+      }
+    });
+
+    // Enhance the playlists endpoint to support pagination
+    app.get("/api/playlists", async (req: Request, res: Response) => {
+      try {
+        const tokens = getTokensFromFile();
+
+        if (!tokens) {
+          return res.status(401).json({ error: "Not authenticated" });
+        }
+
+        // Check if token is expired
+        const now = new Date();
+        const expiresAt = new Date(tokens.expires_at);
+
+        if (now > expiresAt) {
+          return res.status(401).json({ error: "Token expired" });
+        }
+
+        // Get pagination parameters
+        const offset = parseInt(req.query.offset as string) || 0;
+        const limit = parseInt(req.query.limit as string) || 20;
+
+        // Add the offset and limit to the API request
+        const playlistsResponse = await fetch(
+          `https://api.spotify.com/v1/me/playlists?offset=${offset}&limit=${limit}`,
+          {
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+            },
+          }
+        );
+
+        if (!playlistsResponse.ok) {
+          return res.status(playlistsResponse.status).json({
+            error: "Failed to fetch playlists",
+          });
+        }
+
+        const playlistsData: SpotifyPlaylistsResponse =
+          (await playlistsResponse.json()) as SpotifyPlaylistsResponse;
+        res.json(playlistsData);
+      } catch (error) {
+        console.error("Error fetching playlists:", error);
+        res.status(500).json({ error: "Server error" });
       }
     });
   }
