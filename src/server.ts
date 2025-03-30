@@ -985,9 +985,10 @@ async function startServer(): Promise<any> {
   console.log("Setting up routes completed");
   console.log("Starting HTTP server...");
 
-  const server = app.listen(config.port, () => {
-    console.log(`Server running at http://localhost:${config.port}`);
-    console.log("Server startup complete");
+  const host = config.isProduction ? "0.0.0.0" : "localhost";
+
+  const server = app.listen(config.port, host, () => {
+    console.log(`Server running at http://${host}:${config.port}`);
     if (!config.isProduction) open(`http://localhost:${config.port}`);
   });
 
