@@ -1,0 +1,13 @@
+{
+    "recommendations": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-vscode.vscode-typescript-next",
+        "christian-kohler.path-intellisense",
+        "christian-kohler.npm-intellisense",
+        "mongodb.mongodb-vscode",
+        "mikestead.dotenv",
+        "streetsidesoftware.code-spell-checker",
+        "yoavbls.pretty-ts-errors"
+    ]
+}

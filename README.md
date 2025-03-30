@@ -1,102 +1,128 @@
 # Spotify Authentication Server
 
-This typescript/node application is designed to facilitate the authentication process with Spotify's API using the Authorization Code flow. It provides a simple way to obtain access and refresh tokens, which can be used to make authorized requests to Spotify's endpoints.
-As a standalone application, it can be run locally or deployed to a server, making it versatile for various use cases. But it is of limited use alone, and should be integrated into a larger application to be useful.
+A lightweight TypeScript/Node application for obtaining Spotify API tokens using the OAuth 2.0 Authorization Code flow. This standalone utility simplifies the process of authenticating with Spotify's API, allowing you to easily get the tokens needed for making authorized requests.
+
+For real usefulness this program alone does not do much, and needs to be integrated into a larger application.
+
+<div align="center">
 
 ![Spotify Success](.github/resources/images/spotify_success.png)
 
-## Features
+</div>
 
-- Uses the Authorization Code flow (more secure than Implicit Grant)
-- Handles the callback URL automatically with an Express server
-- Obtains both access and refresh tokens
-- Saves tokens to a file for easy access in your application
-- Includes protection against CSRF attacks with state verification
-- Displays a nice success page with token details
-- Automatically opens the browser to start the authentication flow
+## Key Features
+
+- **Authorization Code Flow** implementation (more secure than Implicit Grant)
+- **Express server** handling OAuth redirects automatically
+- **Development & Production modes** with environment-specific configurations
+- **CSRF protection** using state verification
+- **Automatic browser launch** in development mode
+- **Separate token storage** for development and production
 
 ## Prerequisites
 
 - Node.js 16+ installed
-- A Spotify Developer account with registered application
-- Properly configured .env file with your Spotify credentials
+- Spotify Developer account with a registered application
+- Redirect URIs registered in your Spotify Developer Dashboard
 
-## Setup
+## Quick Start
 
-1. **Install dependencies**
+1. **Clone and install dependencies**
 
-```bash
-npm install
+   ```bash
+   git clone [repository-url]
+   cd spotify-authentication-server
+   npm install
+   ```
+
+2. **Configure your environment**
+   Create a `.env` file with:
+
+   ```environment
+   # Spotify API credentials
+   SPOTIFY_CLIENT_ID="your-client-id"
+   SPOTIFY_CLIENT_SECRET="your-client-secret"
+   SPOTIFY_REDIRECT_URLS="http://localhost:3030/api/spotify/callback, https://your-production-domain.com/api/spotify/callback"
+   # CSRF protection
+   SPOTIFY_STATE="your-random-state-string" # Optional for production
+   # Server configuration
+   PORT=3030
+   ```
+
+3. **Run the server**
+
+   ```bash
+   # Development mode (uses first URL, opens browser)
+   npm start
+   
+   # Production mode (uses second URL)
+   npm run start:prod      # Linux/Mac
+   npm run start:prod:win  # Windows
+   ```
+
+## Usage Modes
+
+### Development Mode
+
+Uses localhost redirect URI, automatically opens your browser, and saves tokens to `spotify-tokens-dev.json`.
+
+### Production Mode
+
+Uses your production domain redirect URI, requires manual browser navigation, and saves tokens to `spotify-tokens-prod.json`.
+
+## VS Code Integration
+
+This project includes VS Code configurations for seamless development:
+
+- **Debug configurations** for both development and production modes
+- **Task definitions** for common operations
+- **Recommended extensions** and editor settings
+
+Open the Run & Debug panel (Ctrl+Shift+D) to access launch configurations or use Terminal → Run Task to access tasks.
+
+## Using the Obtained Tokens
+
+After authentication, you'll receive:
+
+```typescript
+// From spotify-tokens-dev.json or spotify-tokens-prod.json
+{
+  "access_token": "BQDKxeM...", // For API requests
+  "token_type": "Bearer",      // Authentication method
+  "expires_in": 3600,          // Seconds until expiration
+  "refresh_token": "AQCvX...", // For obtaining new access tokens
+  "expires_at": "3/30/2025, 2:15:00 PM" // Human-readable expiration
+}
 ```
 
-2. **Configure your .env file**
-
-Ensure your .env file contains the following variables:
-
-```
-SPOTIFY_CLIENT_ID="your-client-id"
-SPOTIFY_CLIENT_SECRET="your-client-secret"
-SPOTIFY_REDIRECT_URLS="http://localhost:3030/api/spotify/callback, https://your-production-domain.com/api/spotify/callback"
-PORT=3030
-```
-
-3. **Important Note on Redirect URIs**
-
-Make sure that one of your registered redirect URIs in your Spotify Developer Dashboard matches exactly what you've set in your .env file. For local development, this should be:
-
-```
-http://localhost:3030/api/spotify/callback
-```
-
-## Usage
-
-Run the authentication server:
-
-```bash
-npm start
-```
-
-The script will:
-
-1. Start an Express server on the configured port
-2. Open your default browser to begin the Spotify authorization process
-3. Handle the callback automatically when Spotify redirects back to your application
-4. Display a success page in the browser with token details
-5. Save the tokens to a file named `spotify-tokens.json`
-6. Output the token information to your console
-
-## Token Information
-
-After successful authentication, you'll receive:
-
-- **Access Token**: Used to make API requests to Spotify
-- **Refresh Token**: Used to get a new access token when it expires
-- **Expiration Time**: When the access token will expire (typically 1 hour)
-- **Token Type**: Usually "Bearer" for use in Authorization headers
-
-## Using the Tokens in Your Application
-
-You can read the tokens from the generated `spotify-tokens.json` file:
+Example usage in your application:
 
 ```typescript
 import * as fs from 'fs';
 
-// Read tokens from file
-const tokenData = JSON.parse(fs.readFileSync('spotify-tokens.json', 'utf8'));
-
-// Use access token for Spotify API requests
-const accessToken = tokenData.access_token;
+// Read the tokens file
+const tokenData = JSON.parse(fs.readFileSync('spotify-tokens-dev.json', 'utf8'));
 
 // Make a request to Spotify API
 const response = await fetch('https://api.spotify.com/v1/me', {
   headers: {
-    'Authorization': `Bearer ${accessToken}`
+    'Authorization': `Bearer ${tokenData.access_token}`
   }
 });
 ```
 
 ## Security Considerations
 
-- The tokens are sensitive information and should be kept secure
-- Never commit the tokens or .env file to version control
-- Consider implementing token refresh logic for production applications
+- Store tokens securely and never commit them to version control
+- Implement token refresh logic for long-running applications
+- Use HTTPS in production environments
+- Consider more robust token management for production applications
+
+## Current Limitations
+
+This utility is primarily designed for development and testing. For production applications, consider:
+
+- Implementing proper token refresh mechanisms
+- Using a database instead of file storage for tokens
+- Adding more robust error handling
+- Integrating with a full authentication system
