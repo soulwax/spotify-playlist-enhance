@@ -1,4 +1,4 @@
-// src/utils/stateUtils.ts
+// File: src/utils/stateUtils.ts
 
 import { randomBytes } from "crypto";
 import * as fs from "fs";

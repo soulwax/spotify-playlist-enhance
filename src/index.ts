@@ -1,4 +1,4 @@
-// src/index.ts
+// File: src/index.ts
 
 import startServer from "./server";
 

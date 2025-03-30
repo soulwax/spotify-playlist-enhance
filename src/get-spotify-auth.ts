@@ -1,6 +1,5 @@
 // File: src/get-spotify-auth.ts
 
-
 import { randomBytes } from "crypto";
 import * as dotenv from "dotenv";
 import express, { Request, Response } from "express";
