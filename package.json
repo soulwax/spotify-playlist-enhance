@@ -10,6 +10,7 @@
     "start:prod": "NODE_ENV=production ts-node src/index.ts",
     "start:prod:win": "set NODE_ENV=production&& ts-node src/index.ts",
     "build": "tsc",
+    "generatekeys": "node scripts/generate-keys.js",
     "pm2:start": "pm2 start ecosystem.config.js --env production",
     "pm2:stop": "pm2 stop ecosystem.config.js",
     "pm2:restart": "pm2 restart ecosystem.config.js --env production",
@@ -28,14 +29,21 @@
     "express": "^4.21.2",
     "node-fetch": "^3.3.2",
     "open": "^10.1.0",
+    "spotify-webview-auth": "file:",
     "pm2": "^5.3.1",
-    "spotify-playlist-viewer": "file:",
-    "spotify-webview-auth": "file:"
+    "express-session": "^1.17.3",
+    "connect-redis": "^7.1.0",
+    "ioredis": "^5.3.2",
+    "cookie-parser": "^1.4.6",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.13.14",
     "@types/node-fetch": "^2.6.12",
+    "@types/express-session": "^1.17.10",
+    "@types/cookie-parser": "^1.4.6",
+    "@types/uuid": "^9.0.7",
     "nodemon": "^3.0.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
