@@ -1,5 +1,5 @@
 {
-  "name": "spotify-playlist-viewer",
+  "name": "spotify-webview-auth",
   "version": "1.0.0",
   "description": "Web application to view Spotify playlists using Spotify API",
   "main": "dist/src/index.js",
@@ -8,14 +8,23 @@
     "dev": "nodemon --exec ts-node src/index.ts",
     "start:prod": "NODE_ENV=production ts-node src/index.ts",
     "start:prod:win": "set NODE_ENV=production&& ts-node src/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "pm2:start": "pm2 start ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop ecosystem.config.js",
+    "pm2:restart": "pm2 restart ecosystem.config.js --env production",
+    "pm2:delete": "pm2 delete ecosystem.config.js",
+    "pm2:logs": "pm2 logs spotify-playlist-viewer",
+    "pm2:monitor": "pm2 monit",
+    "production": "npm run build && npm run pm2:start"
   },
   "dependencies": {
     "dotenv": "^16.4.1",
     "express": "^4.21.2",
     "node-fetch": "^3.3.2",
     "open": "^10.1.0",
-    "spotify-playlist-viewer": "file:"
+    "pm2": "^5.3.1",
+    "spotify-playlist-viewer": "file:",
+    "spotify-webview-auth": "file:"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

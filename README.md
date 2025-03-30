@@ -13,6 +13,7 @@ A web application that displays a user's Spotify playlists after authentication 
 - **User Profile**: Display of the authenticated user's profile information
 - **Responsive Design**: Works on desktop and mobile devices
 - **External Links**: Easy access to open playlists directly in Spotify
+- **Production Ready**: PM2 configuration for robust production deployment
 
 ## Technologies Used
 
@@ -20,6 +21,7 @@ A web application that displays a user's Spotify playlists after authentication 
   - Node.js with TypeScript
   - Express.js for API and serving static files
   - Spotify Web API for authentication and data retrieval
+  - PM2 for production process management
 
 - **Frontend**:
   - HTML5, CSS3, and vanilla JavaScript
@@ -45,7 +47,12 @@ For detailed instructions, see the [Setup Guide](SETUP.md).
 │   ├── js/                  # Client-side JavaScript
 │   └── index.html           # Main HTML file
 ├── src/                     # TypeScript source files
-│   └── server.ts            # Server and authentication logic
+│   ├── server.ts            # Server and authentication logic
+│   ├── get-spotify-auth.ts  # Spotify OAuth handling
+│   ├── index.ts             # Application entry point
+│   ├── types/               # TypeScript type definitions
+│   └── utils/               # Utility functions
+├── ecosystem.config.js      # PM2 configuration
 ├── .env                     # Environment variables (create this)
 └── package.json             # Project dependencies and scripts
 ```
@@ -62,15 +69,36 @@ This will start the server and automatically open a browser window to the applic
 
 ## Production
 
-To run the application in production mode:
+The application comes with PM2 configuration for production deployment. To deploy:
 
 ```bash
-# For macOS/Linux
-npm run start:prod
+# Build the TypeScript application
+npm run build
 
-# For Windows
-npm run start:prod:win
+# Start with PM2
+npm run pm2:start
+
+# Or use the combined command
+npm run production
 ```
+
+Additional PM2 scripts:
+
+```bash
+# View application logs
+npm run pm2:logs
+
+# Monitor application performance
+npm run pm2:monitor
+
+# Restart the application
+npm run pm2:restart
+
+# Stop the application
+npm run pm2:stop
+```
+
+For detailed deployment instructions, see the [Production Deployment Guide](DEPLOYMENT.md).
 
 ## Authentication Flow
 
@@ -81,6 +109,22 @@ The application uses the Spotify OAuth 2.0 Authorization Code flow:
 3. Server exchanges the code for access and refresh tokens
 4. Application uses the access token to fetch data from Spotify API
 
+## Token Management
+
+This application includes:
+
+- Automatic token refresh when expired
+- Persistent token storage (development vs production environments)
+- CSRF protection using state verification
+- Separate token files for development and production
+
+## Security Considerations
+
+- Store your `.env` file securely and don't commit it to version control
+- Configure PM2 properly in production environments
+- Consider using a reverse proxy like Nginx to handle HTTPS
+- Regularly update dependencies to address security vulnerabilities
+
 ## License
 
 MIT
@@ -89,6 +133,7 @@ MIT
 
 - [Spotify Web API](https://developer.spotify.com/documentation/web-api/)
 - [Spotify Brand Guidelines](https://developer.spotify.com/documentation/general/design-and-branding/)
+- [PM2](https://pm2.keymetrics.io/) for production process management
 
 ## Future Enhancements
 
