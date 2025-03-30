@@ -4,11 +4,9 @@ A lightweight TypeScript/Node application for obtaining Spotify API tokens using
 
 For real usefulness this program alone does not do much, and needs to be integrated into a larger application.
 
-<div align="center">
-
-![Spotify Success](.github/resources/images/spotify_success.png)
-
-</div>
+<p align="center">
+  <img src=".github/resources/images/spotify_success.png" alt="Spotify Success" width="700"/>
+</p>
 
 ## Key Features
 
