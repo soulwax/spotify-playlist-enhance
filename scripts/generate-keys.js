@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// File: scripts/generate-keys.js
 
 /**
  * This script generates secure random keys for your application's security settings.

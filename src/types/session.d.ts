@@ -3,7 +3,7 @@
 import "express-session";
 
 declare module "express-session" {
-  interface SessionData {
+  interface Session {
     // Authentication state used for Spotify OAuth CSRF protection
     authState?: string;
 
@@ -13,8 +13,7 @@ declare module "express-session" {
     // Token expiration timestamp as ISO string
     expiresAt?: string;
 
-    // Any other session data you might want to store
+    // User identifier for multi-user support
     userId?: string;
-    displayName?: string;
   }
 }
