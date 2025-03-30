@@ -25,18 +25,36 @@ let isLoadingData = false;
 async function initApp() {
   debug("App initializing");
 
-  // Handle browser navigation
-  window.addEventListener("popstate", handleLocationChange);
+  try {
+    // Add unhandled rejection handler to catch any Promise errors
+    window.addEventListener("unhandledrejection", function (event) {
+      debug(`UNHANDLED PROMISE ERROR: ${event.reason}`);
+      console.error("Unhandled promise rejection:", event.reason);
+    });
 
-  // Initial routing
-  debug("Running initial routing");
-  await handleLocationChange();
+    // Handle browser navigation
+    window.addEventListener("popstate", handleLocationChange);
 
-  debug("App initialization complete");
+    // Initial routing
+    debug("Running initial routing");
+    await handleLocationChange();
+
+    debug("App initialization complete");
+  } catch (error) {
+    debug(`ERROR DURING INITIALIZATION: ${error.message}`);
+    console.error("Initialization error:", error);
+    // Fall back to login page if anything goes wrong during initialization
+    showPage(loginPage);
+  }
 }
 
 // Show a specific page and hide others
 function showPage(pageElement) {
+  if (!pageElement) {
+    debug("ERROR: Tried to show a page that doesn't exist");
+    return;
+  }
+
   debug(`Showing page: ${pageElement.id}`);
 
   // Hide all pages
@@ -52,6 +70,12 @@ async function checkAuthStatus() {
   debug("Checking auth status");
   try {
     const response = await fetch("/api/auth-status");
+
+    if (!response.ok) {
+      debug(`Auth status check failed with status ${response.status}`);
+      return { authenticated: false };
+    }
+
     const data = await response.json();
     debug(`Auth status: ${JSON.stringify(data)}`);
     return data;
@@ -64,6 +88,7 @@ async function checkAuthStatus() {
 // Refresh the access token
 async function refreshToken() {
   if (isRefreshingToken) {
+    debug("Token refresh already in progress, skipping");
     return false;
   }
 
@@ -77,7 +102,7 @@ async function refreshToken() {
 
     if (!response.ok) {
       debug(`Token refresh failed: ${response.status}`);
-      throw new Error("Failed to refresh token");
+      return false;
     }
 
     const result = await response.json();
@@ -95,34 +120,39 @@ async function refreshToken() {
 async function makeAuthenticatedRequest(url, options = {}) {
   debug(`Making authenticated request to ${url}`);
 
-  // First attempt
-  let response = await fetch(url, options);
+  try {
+    // First attempt
+    let response = await fetch(url, options);
 
-  // If unauthorized, try refreshing token and retry
-  if (response.status === 401) {
-    debug("Token expired, attempting to refresh...");
-    const refreshed = await refreshToken();
+    // If unauthorized, try refreshing token and retry
+    if (response.status === 401) {
+      debug("Token expired, attempting to refresh...");
+      const refreshed = await refreshToken();
 
-    if (refreshed) {
-      debug("Token refreshed, retrying request");
-      // Retry request with new token
-      response = await fetch(url, options);
-    } else {
-      debug("Token refresh failed, redirecting to login");
-      // If refresh failed, redirect to login
-      showPage(loginPage);
-      window.history.pushState({}, "", "/");
-      throw new Error("Authentication failed");
+      if (refreshed) {
+        debug("Token refreshed, retrying request");
+        // Retry request with new token
+        response = await fetch(url, options);
+      } else {
+        debug("Token refresh failed, redirecting to login");
+        // If refresh failed, redirect to login
+        showPage(loginPage);
+        window.history.pushState({}, "", "/");
+        throw new Error("Authentication failed");
+      }
     }
-  }
 
-  if (!response.ok) {
-    debug(`Request failed: ${response.status}`);
-    throw new Error(`Request failed: ${response.status}`);
-  }
+    if (!response.ok) {
+      debug(`Request failed: ${response.status}`);
+      throw new Error(`Request failed with status: ${response.status}`);
+    }
 
-  debug("Request successful");
-  return response;
+    debug("Request successful");
+    return response;
+  } catch (error) {
+    debug(`Error in makeAuthenticatedRequest: ${error.message}`);
+    throw error; // Re-throw to let caller handle it
+  }
 }
 
 // Load all user data (profile and playlists) at once
@@ -134,47 +164,70 @@ async function loadUserData() {
 
   debug("Loading user data");
   isLoadingData = true;
-  loadingIndicator.classList.remove("hidden");
-  playlistsContainer.classList.add("hidden");
 
   try {
+    // Show loading indicator
+    if (loadingIndicator) {
+      loadingIndicator.classList.remove("hidden");
+    }
+
+    // Hide playlists container during loading
+    if (playlistsContainer) {
+      playlistsContainer.classList.add("hidden");
+    }
+
+    // Use our combined endpoint to get both user and playlists data
     const response = await makeAuthenticatedRequest("/api/user-data");
     const data = await response.json();
+    debug("Received data from server");
 
-    // Update user profile
+    // Update user profile UI
     currentUser = data.user;
     debug(`User profile loaded: ${currentUser.display_name || currentUser.id}`);
 
-    if (currentUser.images && currentUser.images.length > 0) {
-      userAvatar.src = currentUser.images[0].url;
-    } else {
-      // Fallback image if user has no profile picture
-      userAvatar.src =
-        "https://i.scdn.co/image/ab6761610000e5ebf5c9cb7c03d1e4e5226fc232";
-    }
+    if (userAvatar && userName && userProfile) {
+      if (currentUser.images && currentUser.images.length > 0) {
+        userAvatar.src = currentUser.images[0].url;
+      } else {
+        // Fallback image if user has no profile picture
+        userAvatar.src =
+          "https://i.scdn.co/image/ab6761610000e5ebf5c9cb7c03d1e4e5226fc232";
+      }
 
-    userName.textContent = currentUser.display_name || currentUser.id;
-    userProfile.classList.remove("hidden");
+      userName.textContent = currentUser.display_name || currentUser.id;
+      userProfile.classList.remove("hidden");
+      debug("User profile UI updated");
+    } else {
+      debug("ERROR: User profile UI elements missing");
+    }
 
     // Update playlists
     currentPlaylists = data.playlists.items || [];
     debug(`Loaded ${currentPlaylists.length} playlists`);
 
-    // Update playlist count
-    playlistCount.textContent = `${currentPlaylists.length} ${
-      currentPlaylists.length === 1 ? "playlist" : "playlists"
-    }`;
+    // Update playlist count and render playlists
+    if (playlistCount && playlistsContainer) {
+      playlistCount.textContent = `${currentPlaylists.length} ${
+        currentPlaylists.length === 1 ? "playlist" : "playlists"
+      }`;
 
-    // Render playlists
-    renderPlaylists(currentPlaylists);
+      // Render playlists
+      renderPlaylists(currentPlaylists);
+      debug("Playlists rendered");
 
-    loadingIndicator.classList.add("hidden");
-    playlistsContainer.classList.remove("hidden");
-    debug("All user data loaded and rendered");
+      // Show the playlist container and hide loading indicator
+      if (playlistsContainer && loadingIndicator) {
+        loadingIndicator.classList.add("hidden");
+        playlistsContainer.classList.remove("hidden");
+      }
+    } else {
+      debug("ERROR: Playlist UI elements missing");
+    }
+
+    debug("All user data loaded and rendered successfully");
   } catch (error) {
     debug(`Error loading user data: ${error.message}`);
     console.error("Error loading user data:", error);
-    loadingIndicator.classList.add("hidden");
 
     // If unauthorized, show login page
     if (
@@ -187,13 +240,24 @@ async function loadUserData() {
       window.history.pushState({}, "", "/");
     }
   } finally {
+    // Always hide loading indicator
+    if (loadingIndicator) {
+      loadingIndicator.classList.add("hidden");
+    }
+
     isLoadingData = false;
   }
 }
 
 // Render playlists in the UI
 function renderPlaylists(playlists) {
+  if (!playlistsContainer) {
+    debug("ERROR: Playlist container not found");
+    return;
+  }
+
   debug(`Rendering ${playlists.length} playlists`);
+
   // Clear previous playlists
   playlistsContainer.innerHTML = "";
 
@@ -209,44 +273,50 @@ function renderPlaylists(playlists) {
 
   // Create a card for each playlist
   playlists.forEach((playlist) => {
-    const playlistCard = document.createElement("div");
-    playlistCard.className = "playlist-card";
+    try {
+      const playlistCard = document.createElement("div");
+      playlistCard.className = "playlist-card";
 
-    const playlistImageUrl =
-      playlist.images && playlist.images.length > 0
-        ? playlist.images[0].url
-        : "https://community.spotify.com/t5/image/serverpage/image-id/55829iC2AD64ADB887E2A5/image-size/medium?v=v2&px=400";
+      const playlistImageUrl =
+        playlist.images && playlist.images.length > 0
+          ? playlist.images[0].url
+          : "https://community.spotify.com/t5/image/serverpage/image-id/55829iC2AD64ADB887E2A5/image-size/medium?v=v2&px=400";
 
-    playlistCard.innerHTML = `
-      <a href="${
-        playlist.external_urls.spotify
-      }" class="playlist-link" target="_blank">
-        <img src="${playlistImageUrl}" alt="${
-      playlist.name
-    }" class="playlist-image">
-        <div class="playlist-details">
-          <h3 class="playlist-name">${playlist.name}</h3>
-          <p class="playlist-owner">By ${
-            playlist.owner.display_name || playlist.owner.id
-          }</p>
-          <p class="playlist-tracks">${playlist.tracks.total} ${
-      playlist.tracks.total === 1 ? "track" : "tracks"
-    }</p>
-        </div>
-      </a>
-    `;
+      playlistCard.innerHTML = `
+        <a href="${
+          playlist.external_urls.spotify
+        }" class="playlist-link" target="_blank">
+          <img src="${playlistImageUrl}" alt="${
+        playlist.name
+      }" class="playlist-image">
+          <div class="playlist-details">
+            <h3 class="playlist-name">${playlist.name}</h3>
+            <p class="playlist-owner">By ${
+              playlist.owner.display_name || playlist.owner.id
+            }</p>
+            <p class="playlist-tracks">${playlist.tracks.total} ${
+        playlist.tracks.total === 1 ? "track" : "tracks"
+      }</p>
+          </div>
+        </a>
+      `;
 
-    playlistsContainer.appendChild(playlistCard);
+      playlistsContainer.appendChild(playlistCard);
+    } catch (error) {
+      debug(`Error rendering playlist: ${error.message}`);
+      console.error("Error rendering playlist:", error, playlist);
+    }
   });
+
   debug("Playlist cards created and added to DOM");
 }
 
 // Handle page navigation based on URL
 async function handleLocationChange() {
-  const path = window.location.pathname;
-  debug(`Handling location change: ${path}`);
-
   try {
+    const path = window.location.pathname;
+    debug(`Handling location change: ${path}`);
+
     const status = await checkAuthStatus();
 
     if (path === "/playlists") {
@@ -254,7 +324,8 @@ async function handleLocationChange() {
       if (status.authenticated) {
         debug("User is authenticated, showing playlists page");
         showPage(playlistsPage);
-        // Load or refresh data
+
+        // Load playlists data
         await loadUserData();
       } else {
         debug("User not authenticated, redirecting to home");
@@ -267,7 +338,8 @@ async function handleLocationChange() {
         debug("User is authenticated, redirecting to playlists");
         window.history.pushState({}, "", "/playlists");
         showPage(playlistsPage);
-        // Load or refresh data
+
+        // Load playlists data
         await loadUserData();
       } else {
         debug("User not authenticated, showing login page");
@@ -293,9 +365,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginButton = document.querySelector(".login-button");
   if (loginButton) {
     debug("Login button found, adding click listener");
-    loginButton.addEventListener("click", (e) => {
-      debug("Login button clicked");
-    });
   } else {
     debug("Login button not found");
   }
@@ -306,6 +375,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Add direct click handlers for debugging
 window.spotifyLoginClick = () => {
-  debug("Manual login click handler triggered");
+  debug("Login button clicked");
   window.location.href = "/login";
 };
