@@ -4,6 +4,7 @@
   "description": "Web application to view Spotify playlists using Spotify API",
   "main": "dist/src/index.js",
   "scripts": {
+    "postinstall": "npm run build",
     "start": "ts-node src/index.ts",
     "dev": "nodemon --exec ts-node src/index.ts",
     "start:prod": "NODE_ENV=production ts-node src/index.ts",
