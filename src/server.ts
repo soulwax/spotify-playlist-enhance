@@ -1,7 +1,6 @@
 // src/server.ts
-import { randomBytes } from "crypto";
 import * as dotenv from "dotenv";
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import * as fs from "fs";
 import fetch from "node-fetch";
 import open from "open";
@@ -9,12 +8,11 @@ import path from "path";
 import {
   AuthStatusResponse,
   SpotifyAuthConfig,
-  SpotifyImage,
-  SpotifyPlaylist,
   SpotifyPlaylistsResponse,
   SpotifyUser,
   TokenData,
-} from "./types/types"; // Adjust the import path as necessary
+} from "./types/types";
+import stateManager from "./utils/stateUtils";
 
 // Initialize environment variables
 dotenv.config();
@@ -36,41 +34,6 @@ const config: SpotifyAuthConfig = {
 };
 
 // --- Helper Functions ---
-function generateRandomString(length: number): string {
-  return randomBytes(Math.ceil(length / 2))
-    .toString("hex")
-    .slice(0, length);
-}
-
-function storeState(state: string): void {
-  try {
-    fs.writeFileSync(".spotify_auth_state", state);
-  } catch (error) {
-    console.error("Failed to write state to file:", error);
-  }
-}
-
-function getStoredState(): string | null {
-  try {
-    if (fs.existsSync(".spotify_auth_state")) {
-      return fs.readFileSync(".spotify_auth_state", "utf8");
-    }
-  } catch (error) {
-    console.error("Failed to read state from file:", error);
-  }
-  return null;
-}
-
-function cleanupState(): void {
-  try {
-    if (fs.existsSync(".spotify_auth_state")) {
-      fs.unlinkSync(".spotify_auth_state");
-    }
-  } catch (error) {
-    console.error("Failed to delete state file:", error);
-  }
-}
-
 function getTokensFromFile(): TokenData | null {
   const tokensFilename = config.isProduction
     ? ".spotify-tokens-prod.json"
@@ -101,6 +64,23 @@ function getTokensFromFile(): TokenData | null {
   return null;
 }
 
+// --- Middleware ---
+function requestLogger(req: Request, res: Response, next: NextFunction) {
+  const start = Date.now();
+
+  // Log at the end of the request
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} - ${
+        res.statusCode
+      } (${duration}ms)`
+    );
+  });
+
+  next();
+}
+
 // --- Main Function ---
 async function startServer(): Promise<void> {
   console.log(
@@ -119,16 +99,20 @@ async function startServer(): Promise<void> {
 
   console.log(`Using redirect URI: ${config.redirectUri}`);
 
-  const state = generateRandomString(16);
-  storeState(state);
-
   const app = express();
+
+  // Add request logging middleware
+  app.use(requestLogger);
 
   // Serve static files from the public directory
   app.use(express.static(path.join(__dirname, "..", "public")));
 
   // Route for login
   app.get("/login", (req: Request, res: Response) => {
+    // Generate a new state for this login request
+    const state = stateManager.generateState();
+    stateManager.saveState(state);
+
     const url = new URL("https://accounts.spotify.com/authorize");
     url.searchParams.append("response_type", "code");
     url.searchParams.append("client_id", config.clientId);
@@ -136,7 +120,29 @@ async function startServer(): Promise<void> {
     url.searchParams.append("redirect_uri", config.redirectUri);
     url.searchParams.append("state", state);
 
+    console.log(`Redirecting to Spotify with state: ${state}`);
     res.redirect(url.toString());
+  });
+
+  // Debug route to check state
+  app.get("/debug-state", (req: Request, res: Response) => {
+    const allStates = stateManager.getAllStates();
+    const stateFileExists = fs.existsSync(".spotify_auth_state");
+    let fileState = null;
+
+    if (stateFileExists) {
+      try {
+        fileState = fs.readFileSync(".spotify_auth_state", "utf8");
+      } catch (e) {
+        fileState = "Error reading file";
+      }
+    }
+
+    res.json({
+      memoryStates: allStates,
+      stateFileExists,
+      fileState,
+    });
   });
 
   // Callback route
@@ -144,16 +150,37 @@ async function startServer(): Promise<void> {
     try {
       const { code, state: receivedState } = req.query;
 
+      console.log(`Callback received with state: ${receivedState}`);
+
       if (!code || typeof code !== "string") {
         return res.status(400).send("Authorization code not found.");
       }
 
-      const storedState = getStoredState();
-      cleanupState();
-
-      if (receivedState !== storedState) {
-        return res.status(400).send("State mismatch error.");
+      if (!receivedState || typeof receivedState !== "string") {
+        return res.status(400).send("State parameter not found.");
       }
+
+      // Verify the state to prevent CSRF attacks
+      const isValidState = stateManager.verifyState(receivedState);
+
+      if (!isValidState) {
+        console.error(`State mismatch. Received: ${receivedState}`);
+        return res.status(400).send(`
+          <h1>State Mismatch Error</h1>
+          <p>We couldn't verify that the authentication request originated from this application.</p>
+          <p>This could be due to:</p>
+          <ul>
+            <li>Session timeout</li>
+            <li>Multiple login attempts</li>
+            <li>Server restart</li>
+          </ul>
+          <p><a href="/">Try logging in again</a></p>
+          <p><small>For debugging, visit <a href="/debug-state">/debug-state</a></small></p>
+        `);
+      }
+
+      // State is valid, clean it up
+      stateManager.cleanupState(receivedState);
 
       const tokenResponse = await fetch(
         "https://accounts.spotify.com/api/token",
@@ -197,6 +224,8 @@ async function startServer(): Promise<void> {
         JSON.stringify(tokenData, null, 2),
         "utf8"
       );
+
+      console.log(`Token obtained successfully, redirecting to playlists page`);
 
       // Redirect to the playlists page
       res.redirect("/playlists");
@@ -297,9 +326,132 @@ async function startServer(): Promise<void> {
     res.json(response);
   });
 
+  // API endpoint to refresh the token
+  app.post("/api/refresh-token", async (req: Request, res: Response) => {
+    try {
+      const tokens = getTokensFromFile();
+
+      if (!tokens || !tokens.refresh_token) {
+        return res.status(401).json({ error: "No refresh token available" });
+      }
+
+      const tokenResponse = await fetch(
+        "https://accounts.spotify.com/api/token",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization:
+              "Basic " +
+              Buffer.from(`${config.clientId}:${config.clientSecret}`).toString(
+                "base64"
+              ),
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: tokens.refresh_token,
+          }).toString(),
+        }
+      );
+
+      if (!tokenResponse.ok) {
+        return res.status(tokenResponse.status).json({
+          error: "Failed to refresh token",
+        });
+      }
+
+      const newTokenData = (await tokenResponse.json()) as TokenData;
+
+      // The response doesn't include the refresh token if it's still valid
+      if (!newTokenData.refresh_token) {
+        newTokenData.refresh_token = tokens.refresh_token;
+      }
+
+      newTokenData.expires_at = new Date(
+        Date.now() + newTokenData.expires_in * 1000
+      ).toLocaleString();
+
+      // Save updated tokens
+      const tokensFilename = config.isProduction
+        ? ".spotify-tokens-prod.json"
+        : ".spotify-tokens-dev.json";
+      fs.writeFileSync(
+        tokensFilename,
+        JSON.stringify(newTokenData, null, 2),
+        "utf8"
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error refreshing token:", error);
+      res.status(500).json({ error: "Server error" });
+    }
+  });
+
   // Serve index.html for client-side routing
   app.get(["/", "/playlists"], (req: Request, res: Response) => {
     res.sendFile(path.join(__dirname, "..", "public", "index.html"));
+  });
+
+  app.get("/api/user-data", async (req: Request, res: Response) => {
+    try {
+      const tokens = getTokensFromFile();
+
+      if (!tokens) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      // Check if token is expired
+      const now = new Date();
+      const expiresAt = new Date(tokens.expires_at);
+
+      if (now > expiresAt) {
+        return res.status(401).json({ error: "Token expired" });
+      }
+
+      // Fetch user profile
+      const userResponse = await fetch("https://api.spotify.com/v1/me", {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+        },
+      });
+
+      if (!userResponse.ok) {
+        return res.status(userResponse.status).json({
+          error: "Failed to fetch user profile",
+        });
+      }
+
+      const userData: SpotifyUser = (await userResponse.json()) as SpotifyUser;
+
+      // Fetch playlists
+      const playlistsResponse = await fetch(
+        "https://api.spotify.com/v1/me/playlists",
+        {
+          headers: {
+            Authorization: `Bearer ${tokens.access_token}`,
+          },
+        }
+      );
+
+      if (!playlistsResponse.ok) {
+        return res.status(playlistsResponse.status).json({
+          error: "Failed to fetch playlists",
+        });
+      }
+
+      const playlistsData: SpotifyPlaylistsResponse =
+        (await playlistsResponse.json()) as SpotifyPlaylistsResponse;
+
+      // Return combined data
+      res.json({
+        user: userData,
+        playlists: playlistsData,
+      });
+    } catch (error) {
+      console.error("Error fetching user data:", error);
+      res.status(500).json({ error: "Server error" });
+    }
   });
 
   // Start server
@@ -320,12 +472,3 @@ if (require.main === module) {
 }
 
 export default startServer;
-export type {
-  AuthStatusResponse,
-  SpotifyAuthConfig,
-  SpotifyImage,
-  SpotifyPlaylist,
-  SpotifyPlaylistsResponse,
-  SpotifyUser,
-  TokenData,
-};

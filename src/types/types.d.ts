@@ -1,3 +1,8 @@
+// File: src/types/types.d.ts
+
+/**
+ * Configuration for Spotify authentication
+ */
 export interface SpotifyAuthConfig {
   clientId: string;
   clientSecret: string;
@@ -7,14 +12,36 @@ export interface SpotifyAuthConfig {
   isProduction: boolean;
 }
 
-// --- Configuration Types ---
-export interface SpotifyAuthConfig {
-  clientId: string;
-  clientSecret: string;
-  redirectUri: string;
-  scopes: string;
-  port: number;
-  isProduction: boolean;
+/**
+ * Interface for a stored state object with expiration tracking
+ */
+export interface StoredState {
+  state: string;
+  timestamp: number;
+}
+
+/**
+ * Spotify OAuth token data
+ * Based on Spotify API documentation: https://developer.spotify.com/documentation/general/guides/authorization/code-flow/
+ */
+export interface TokenData {
+  /** The access token that can be used to authenticate Spotify API requests */
+  access_token: string;
+
+  /** The type of token, usually "Bearer" */
+  token_type: string;
+
+  /** The number of seconds after which the access token expires */
+  expires_in: number;
+
+  /** The refresh token that can be used to obtain a new access token */
+  refresh_token: string;
+
+  /** Space-separated list of scopes that were approved by the user */
+  scope: string;
+
+  /** Human-readable timestamp of when the token expires (added by our application) */
+  expires_at: string;
 }
 
 /**
@@ -93,28 +120,4 @@ export interface SpotifyPlaylistsResponse {
 export interface AuthStatusResponse {
   authenticated: boolean;
   expiresAt?: string;
-}
-
-/**
- * Interface representing Spotify OAuth token data
- * Based on Spotify API documentation: https://developer.spotify.com/documentation/general/guides/authorization/code-flow/
- */
-export interface TokenData {
-  /** The access token that can be used to authenticate Spotify API requests */
-  access_token: string;
-
-  /** The type of token, usually "Bearer" */
-  token_type: string;
-
-  /** The number of seconds after which the access token expires */
-  expires_in: number;
-
-  /** The refresh token that can be used to obtain a new access token */
-  refresh_token: string;
-
-  /** Space-separated list of scopes that were approved by the user */
-  scope: string;
-
-  /** Human-readable timestamp of when the token expires (added by our application) */
-  expires_at: string;
 }

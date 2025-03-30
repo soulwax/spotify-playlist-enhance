@@ -2,12 +2,12 @@
   "name": "spotify-playlist-viewer",
   "version": "1.0.0",
   "description": "Web application to view Spotify playlists using Spotify API",
-  "main": "dist/src/server.js",
+  "main": "dist/src/index.js",
   "scripts": {
-    "start": "ts-node src/server.ts",
-    "dev": "nodemon --exec ts-node src/server.ts",
-    "start:prod": "NODE_ENV=production ts-node src/server.ts",
-    "start:prod:win": "set NODE_ENV=production&& ts-node src/server.ts",
+    "start": "ts-node src/index.ts",
+    "dev": "nodemon --exec ts-node src/index.ts",
+    "start:prod": "NODE_ENV=production ts-node src/index.ts",
+    "start:prod:win": "set NODE_ENV=production&& ts-node src/index.ts",
     "build": "tsc"
   },
   "dependencies": {
