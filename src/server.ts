@@ -41,20 +41,27 @@ function getTokensFromFile(): TokenData | null {
 
   try {
     if (fs.existsSync(tokensFilename)) {
+      console.log(`Reading tokens from ${tokensFilename}`);
       const data = fs.readFileSync(tokensFilename, "utf8");
-      const parsedData = JSON.parse(data);
 
-      // Validate that the parsed data matches the TokenData interface
-      if (
-        typeof parsedData.access_token === "string" &&
-        typeof parsedData.token_type === "string" &&
-        typeof parsedData.expires_in === "number" &&
-        typeof parsedData.refresh_token === "string" &&
-        typeof parsedData.expires_at === "string"
-      ) {
-        return parsedData as TokenData;
-      } else {
-        console.error("Token data is missing required fields");
+      try {
+        const parsedData = JSON.parse(data);
+
+        // Validate that the parsed data matches the TokenData interface
+        if (
+          typeof parsedData.access_token === "string" &&
+          typeof parsedData.token_type === "string" &&
+          typeof parsedData.expires_in === "number" &&
+          typeof parsedData.refresh_token === "string" &&
+          typeof parsedData.expires_at === "string"
+        ) {
+          return parsedData as TokenData;
+        } else {
+          console.error("Token data is missing required fields");
+          return null;
+        }
+      } catch (error) {
+        console.error(`Error parsing token JSON: ${error}`);
         return null;
       }
     }
@@ -213,7 +220,7 @@ async function startServer(): Promise<void> {
       const tokenData: TokenData = (await tokenResponse.json()) as TokenData;
       tokenData.expires_at = new Date(
         Date.now() + tokenData.expires_in * 1000
-      ).toLocaleString();
+      ).toISOString(); // Use ISO format instead of locale string
 
       // Save tokens to a file
       const tokensFilename = config.isProduction
@@ -314,16 +321,27 @@ async function startServer(): Promise<void> {
       return res.json(response);
     }
 
-    // Check if token is expired
-    const now = new Date();
-    const expiresAt = new Date(tokens.expires_at);
+    try {
+      // Check if token is expired by converting date string to timestamp
+      const now = Date.now();
+      // Add 5 minutes buffer to account for any clock differences
+      const expiresAt = new Date(tokens.expires_at).getTime() + 5 * 60 * 1000;
 
-    const response: AuthStatusResponse = {
-      authenticated: now < expiresAt,
-      expiresAt: tokens.expires_at,
-    };
+      const isAuthenticated = now < expiresAt;
+      console.log(
+        `Auth check: now=${now}, expires=${expiresAt}, authenticated=${isAuthenticated}`
+      );
 
-    res.json(response);
+      const response: AuthStatusResponse = {
+        authenticated: isAuthenticated,
+        expiresAt: tokens.expires_at,
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error("Date parsing error:", error);
+      res.json({ authenticated: false, error: "Date parsing error" });
+    }
   });
 
   // API endpoint to refresh the token
@@ -393,11 +411,17 @@ async function startServer(): Promise<void> {
     res.sendFile(path.join(__dirname, "..", "public", "index.html"));
   });
 
+  // Replace the /api/user-data endpoint with this improved version:
+
+  // Combined API endpoint to get both user and playlists
   app.get("/api/user-data", async (req: Request, res: Response) => {
+    console.log("User-data endpoint called");
+
     try {
       const tokens = getTokensFromFile();
 
       if (!tokens) {
+        console.log("User-data: Not authenticated (no tokens)");
         return res.status(401).json({ error: "Not authenticated" });
       }
 
@@ -406,10 +430,12 @@ async function startServer(): Promise<void> {
       const expiresAt = new Date(tokens.expires_at);
 
       if (now > expiresAt) {
+        console.log("User-data: Token expired");
         return res.status(401).json({ error: "Token expired" });
       }
 
       // Fetch user profile
+      console.log("User-data: Fetching user profile from Spotify API");
       const userResponse = await fetch("https://api.spotify.com/v1/me", {
         headers: {
           Authorization: `Bearer ${tokens.access_token}`,
@@ -417,14 +443,21 @@ async function startServer(): Promise<void> {
       });
 
       if (!userResponse.ok) {
+        const errorText = await userResponse.text();
+        console.error(
+          `User-data: Failed to fetch user profile: ${userResponse.status} - ${errorText}`
+        );
         return res.status(userResponse.status).json({
           error: "Failed to fetch user profile",
+          details: errorText,
         });
       }
 
       const userData: SpotifyUser = (await userResponse.json()) as SpotifyUser;
+      console.log(`User-data: User profile fetched for ${userData.id}`);
 
       // Fetch playlists
+      console.log("User-data: Fetching playlists from Spotify API");
       const playlistsResponse = await fetch(
         "https://api.spotify.com/v1/me/playlists",
         {
@@ -435,24 +468,122 @@ async function startServer(): Promise<void> {
       );
 
       if (!playlistsResponse.ok) {
+        const errorText = await playlistsResponse.text();
+        console.error(
+          `User-data: Failed to fetch playlists: ${playlistsResponse.status} - ${errorText}`
+        );
         return res.status(playlistsResponse.status).json({
           error: "Failed to fetch playlists",
+          details: errorText,
         });
       }
 
       const playlistsData: SpotifyPlaylistsResponse =
         (await playlistsResponse.json()) as SpotifyPlaylistsResponse;
+      console.log(`User-data: ${playlistsData.items.length} playlists fetched`);
 
       // Return combined data
       res.json({
         user: userData,
         playlists: playlistsData,
       });
-    } catch (error) {
+
+      console.log("User-data: Response sent successfully");
+    } catch (error: any) {
       console.error("Error fetching user data:", error);
-      res.status(500).json({ error: "Server error" });
+      res.status(500).json({ error: "Server error", details: error.message });
     }
   });
+
+  // Token debug endpoint - ONLY FOR DEVELOPMENT
+  if (!config.isProduction) {
+    app.get("/debug-token", (req: Request, res: Response) => {
+      try {
+        const tokensFilename = ".spotify-tokens-dev.json";
+
+        // Check if file exists
+        if (!fs.existsSync(tokensFilename)) {
+          return res.json({
+            exists: false,
+            message: "Token file does not exist",
+          });
+        }
+
+        // Read the file
+        const data = fs.readFileSync(tokensFilename, "utf8");
+
+        // Check if file is empty
+        if (!data || data.trim() === "") {
+          return res.json({
+            exists: true,
+            empty: true,
+            message: "Token file exists but is empty",
+          });
+        }
+
+        try {
+          // Try to parse the JSON
+          const parsedData = JSON.parse(data);
+
+          // Check if it has the required fields
+          const hasRequiredFields =
+            typeof parsedData.access_token === "string" &&
+            typeof parsedData.token_type === "string" &&
+            typeof parsedData.expires_in === "number" &&
+            typeof parsedData.refresh_token === "string" &&
+            typeof parsedData.expires_at === "string";
+
+          // Check token expiration
+          const now = new Date();
+          const expiresAt = new Date(parsedData.expires_at);
+          const secondsRemaining = Math.floor(
+            (expiresAt.getTime() - now.getTime()) / 1000
+          );
+          const isExpired = now > expiresAt;
+
+          // Return token debug info (don't expose the actual token)
+          return res.json({
+            exists: true,
+            empty: false,
+            valid: hasRequiredFields,
+            isExpired,
+            secondsRemaining,
+            expiresAt: parsedData.expires_at,
+            tokenStart: parsedData.access_token
+              ? parsedData.access_token.substring(0, 5) + "..."
+              : null,
+            tokenLength: parsedData.access_token
+              ? parsedData.access_token.length
+              : 0,
+            refreshTokenExists: !!parsedData.refresh_token,
+            scopes: parsedData.scope,
+            message: hasRequiredFields
+              ? isExpired
+                ? "Token exists but has expired"
+                : "Token is valid"
+              : "Token exists but is missing required fields",
+          });
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          return res.json({
+            exists: true,
+            empty: false,
+            valid: false,
+            jsonError: errorMessage,
+            message: "Token file contains invalid JSON",
+          });
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        return res.status(500).json({
+          error: errorMessage,
+          message: "Server error while checking token",
+        });
+      }
+    });
+  }
 
   // Start server
   app.listen(config.port, () => {

@@ -378,3 +378,79 @@ window.spotifyLoginClick = () => {
   debug("Login button clicked");
   window.location.href = "/login";
 };
+
+// Debug helper functions
+window.debugSpotify = {
+  // Check token status
+  checkToken: async function () {
+    console.log("Checking token status...");
+    try {
+      const response = await fetch("/debug-token");
+      const data = await response.json();
+      console.log("Token status:", data);
+      return data;
+    } catch (error) {
+      console.error("Error checking token:", error);
+      return null;
+    }
+  },
+
+  // Force the login flow
+  login: function () {
+    window.location.href = "/login";
+  },
+
+  // Check auth status
+  checkAuth: async function () {
+    console.log("Checking auth status...");
+    try {
+      const response = await fetch("/api/auth-status");
+      const data = await response.json();
+      console.log("Auth status:", data);
+      return data;
+    } catch (error) {
+      console.error("Error checking auth status:", error);
+      return null;
+    }
+  },
+
+  // Force load user data
+  loadUserData: async function () {
+    console.log("Loading user data...");
+    try {
+      await loadUserData();
+      console.log("User data loaded successfully");
+    } catch (error) {
+      console.error("Error loading user data:", error);
+    }
+  },
+
+  // Force navigate to playlists page
+  goToPlaylists: function () {
+    window.history.pushState({}, "", "/playlists");
+    showPage(playlistsPage);
+    this.loadUserData();
+  },
+};
+
+// Add manual token refresh function
+window.refreshToken = async function () {
+  console.log("Manually refreshing token...");
+  try {
+    const response = await fetch("/api/refresh-token", {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      console.error(`Token refresh failed: ${response.status}`);
+      return false;
+    }
+
+    const result = await response.json();
+    console.log("Token refreshed successfully");
+    return result.success;
+  } catch (error) {
+    console.error("Error refreshing token:", error);
+    return false;
+  }
+};
