@@ -5,6 +5,7 @@ import * as crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import Redis from "ioredis";
 import * as dotenv from "dotenv";
+import UtilHelper from "./utilHelpers";
 
 dotenv.config();
 
@@ -12,18 +13,15 @@ dotenv.config();
  * Class for securely managing authentication state
  * Uses Redis for state storage and encrypted values
  */
-export class SecureStateManager {
-  private redis: Redis | null = null;
-  private algorithm = "aes-256-gcm";
-  private keyEnv = process.env.STATE_ENCRYPTION_KEY;
-  private key: Buffer;
-  private statePrefix = "spotify_auth_state:";
-  private stateExpirySeconds = 600; // 10 minutes
 
-  /**
-   * Create a new SecureStateManager
-   */
+export class SecureStateManager extends UtilHelper {
   constructor() {
+    super();
+    this.statePrefix = "spotify_auth_state:";
+    this.stateExpirySeconds = 600; // 10 minutes
+    this.algorithm = "aes-256-gcm";
+    this.keyEnv = process.env.STATE_ENCRYPTION_KEY;
+
     // Generate a secure encryption key or use one from environment
     if (!this.keyEnv) {
       console.warn(
@@ -38,19 +36,44 @@ export class SecureStateManager {
 
     // Setup Redis if connection string is available
     const redisUrl = process.env.REDIS_URL;
+
     if (redisUrl) {
       try {
+        console.log("Connecting to Redis...");
+
+        // Create a connection timeout
+        const connectionTimeout = setTimeout(() => {
+          console.error("Redis connection timeout after 5 seconds");
+          console.log("Falling back to memory storage");
+          this.redis = null;
+        }, 5000); // 5 second timeout
+
         this.redis = new Redis(redisUrl);
-        console.log("Connected to Redis for secure state management");
+
+        // Add event listeners for successful connection and errors
+        this.redis.on("connect", () => {
+          clearTimeout(connectionTimeout);
+          console.log("Successfully connected to Redis");
+        });
+
+        this.redis.on("error", (err) => {
+          console.error("Redis connection error:", err);
+          if (this.redis) {
+            this.redis
+              .quit()
+              .catch((e) =>
+                console.error("Error closing Redis connection:", e)
+              );
+            this.redis = null;
+          }
+        });
       } catch (error) {
         console.error("Failed to connect to Redis:", error);
-        console.warn("Falling back to in-memory state storage (less secure)");
+        console.warn("Falling back to memory storage");
         this.redis = null;
       }
     } else {
-      console.warn(
-        "REDIS_URL not found in environment, using in-memory state storage (less secure)"
-      );
+      console.warn("REDIS_URL not found in environment, using memory storage");
     }
   }
 
@@ -251,6 +274,22 @@ export class SecureStateManager {
         console.log(`Cleaned up ${expiredStates.length} expired states`);
       }
     }
+  }
+
+  getStateExpirySeconds(): number {
+    return this.stateExpirySeconds;
+  }
+  getKey(): Buffer {
+    return this.key;
+  }
+  getAlgorithm(): string {
+    return this.algorithm;
+  }
+  getKeyEnv(): string | undefined {
+    return this.keyEnv;
+  }
+  getStateStore(): Redis | null {
+    return this.redis;
   }
 }
 

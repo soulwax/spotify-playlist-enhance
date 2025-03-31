@@ -3,9 +3,8 @@ module.exports = {
   apps: [
     {
       name: "spotify-playlist-viewer",
-      script: "dist/src/index.js",
+      script: "./dist/src/index.js", // Make sure this points to the correct file
       instances: 1,
-      autostart: true,
       watch: false,
       max_memory_restart: "256M",
       env: {

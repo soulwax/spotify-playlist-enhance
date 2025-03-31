@@ -26,17 +26,41 @@ export class TokenStorage {
     const redisUrl = process.env.REDIS_URL;
     if (redisUrl) {
       try {
+        console.log("Connecting to Redis...");
+
+        // Create a connection timeout
+        const connectionTimeout = setTimeout(() => {
+          console.error("Redis connection timeout after 5 seconds");
+          console.log("Falling back to memory storage");
+          this.redis = null;
+        }, 5000); // 5 second timeout
+
         this.redis = new Redis(redisUrl);
-        console.log("Connected to Redis for token storage");
+
+        // Add event listeners for successful connection and errors
+        this.redis.on("connect", () => {
+          clearTimeout(connectionTimeout);
+          console.log("Successfully connected to Redis");
+        });
+
+        this.redis.on("error", (err) => {
+          console.error("Redis connection error:", err);
+          if (this.redis) {
+            this.redis
+              .quit()
+              .catch((e) =>
+                console.error("Error closing Redis connection:", e)
+              );
+            this.redis = null;
+          }
+        });
       } catch (error) {
         console.error("Failed to connect to Redis:", error);
-        console.warn("Falling back to file-based token storage");
+        console.warn("Falling back to memory storage");
         this.redis = null;
       }
     } else {
-      console.warn(
-        "REDIS_URL not found in environment, using file-based token storage"
-      );
+      console.warn("REDIS_URL not found in environment, using memory storage");
     }
   }
 
@@ -154,6 +178,10 @@ export class TokenStorage {
       console.log("Redis connection closed");
     }
   }
+
+  getRedisStatus = (): boolean => {
+    return this.redis !== null;
+  };
 }
 
 // Create and export default instance

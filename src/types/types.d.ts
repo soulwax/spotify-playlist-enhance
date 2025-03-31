@@ -1,5 +1,6 @@
 // File: src/types/types.d.ts
 
+
 /**
  * Configuration for Spotify authentication
  */

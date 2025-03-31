@@ -3,6 +3,16 @@
 import * as dotenv from "dotenv";
 import express, { NextFunction, Request, Response } from "express";
 import session from "express-session";
+
+declare module "express-session" {
+  interface Session {
+    authState?: string;
+    isAuthenticated?: boolean;
+    expiresAt?: string;
+    userId?: string;
+  }
+}
+
 import * as fs from "fs";
 import fetch from "node-fetch";
 import open from "open";
@@ -20,6 +30,7 @@ import tokenStorage from "./utils/tokenStorage";
 import apiCache from "./utils/apiCache";
 import rateLimiter from "./utils/rateLimiter";
 import spotifyClient from "./utils/spotifyClient";
+// Import this declaration file to ensure TypeScript knows about our session properties
 
 // Redis session store setup - conditionally imported
 let RedisStore: any;
@@ -38,6 +49,49 @@ try {
 
 // Initialize environment variables
 dotenv.config();
+
+// Add a flag to detect Redis connection issues
+let redisAvailable = false;
+
+// Function to check if Redis is available
+async function checkRedisAvailability() {
+  try {
+    if (process.env.REDIS_URL) {
+      console.log("Checking Redis availability...");
+
+      // Try to connect to Redis
+      const redis = new Redis(process.env.REDIS_URL);
+
+      // Set a timeout for the connection
+      const connectionPromise = new Promise((resolve, reject) => {
+        redis.on("connect", () => {
+          redis.disconnect();
+          resolve(true);
+        });
+
+        redis.on("error", (err: any) => {
+          redis.disconnect();
+          reject(err);
+        });
+      });
+
+      // Create a timeout promise
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Redis connection timeout")), 5000)
+      );
+
+      // Race the connection against the timeout
+      await Promise.race([connectionPromise, timeoutPromise]);
+
+      console.log("Redis is available");
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Redis is unavailable:", error);
+    return false;
+  }
+}
 
 // --- Configuration ---
 const isProduction = process.env.NODE_ENV === "production";
@@ -111,12 +165,21 @@ function requestLogger(req: Request, res: Response, next: NextFunction) {
 }
 
 // --- Main Function ---
-async function startServer(): Promise<void> {
+async function startServer(): Promise<any> {
   console.log(
     `--- Spotify Playlist App (${
       config.isProduction ? "PRODUCTION" : "DEVELOPMENT"
     } Mode) ---`
   );
+
+  // Check Redis availability first
+  redisAvailable = await checkRedisAvailability();
+
+  if (!redisAvailable) {
+    console.warn("Redis is unavailable - running in fallback mode");
+    // Force environment variables to disable Redis features
+    process.env.USE_REDIS = "false";
+  }
 
   // Validation checks
   if (!config.clientId || !config.clientSecret || !config.redirectUri) {
@@ -147,7 +210,7 @@ async function startServer(): Promise<void> {
   };
 
   // Use Redis session store if available
-  if (process.env.REDIS_URL && RedisStore && Redis) {
+  if (redisAvailable && process.env.REDIS_URL && RedisStore && Redis) {
     console.log("Using Redis session store");
     const redisClient = new Redis(process.env.REDIS_URL);
     sessionConfig.store = new RedisStore({ client: redisClient });
@@ -170,14 +233,32 @@ async function startServer(): Promise<void> {
   // Serve static files from the public directory
   app.use(express.static(path.join(__dirname, "..", "public")));
 
+  // Health check endpoint that doesn't require Redis
+  app.get("/health", (req: Request, res: Response) => {
+    const healthData = {
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      redis: {
+        available: redisAvailable,
+        secureState: secureStateManager.getRedisStatus?.() || false,
+        tokenStorage: tokenStorage.getRedisStatus?.() || false,
+        apiCache: apiCache.getRedisStatus?.() || false,
+        rateLimiter: rateLimiter.getRedisStatus?.() || false,
+      },
+      uptime: process.uptime(),
+    };
+
+    res.json(healthData);
+  });
+
   // Route for login
   app.get("/login", async (req: Request, res: Response) => {
     // Generate a new state for this login request
     const state = secureStateManager.generateState();
     await secureStateManager.saveState(state);
 
-    // Store state in session as a backup
-    req.session.authState = state;
+    // Store state in session as a backup using type assertion
+    (req.session as any).authState = state;
 
     const url = new URL("https://accounts.spotify.com/authorize");
     url.searchParams.append("response_type", "code");
@@ -190,7 +271,7 @@ async function startServer(): Promise<void> {
     res.redirect(url.toString());
   });
 
-  // Callback route - Enhanced with Redis token storage
+  // Callback route
   app.get("/api/spotify/callback", async (req: Request, res: Response) => {
     try {
       const { code, state: receivedState } = req.query;
@@ -209,29 +290,30 @@ async function startServer(): Promise<void> {
       const isValidState = await secureStateManager.verifyState(receivedState);
 
       // Double check with session as fallback
-      const sessionState = req.session.authState;
+      const sessionState = (req.session as any).authState;
       const isValidSessionState = sessionState === receivedState;
 
       // Clear session state
-      req.session.authState = undefined;
+      (req.session as any).authState = undefined;
 
       if (!isValidState && !isValidSessionState) {
         console.error(
           `State mismatch. Received: ${receivedState}, Session: ${sessionState}`
         );
         return res.status(400).send(`
-        <h1>State Mismatch Error</h1>
-        <p>We couldn't verify that the authentication request originated from this application.</p>
-        <p>This could be due to:</p>
-        <ul>
-          <li>Session timeout</li>
-          <li>Multiple login attempts</li>
-          <li>Browser settings blocking cookies</li>
-        </ul>
-        <p><a href="/">Try logging in again</a></p>
-      `);
+          <h1>State Mismatch Error</h1>
+          <p>We couldn't verify that the authentication request originated from this application.</p>
+          <p>This could be due to:</p>
+          <ul>
+            <li>Session timeout</li>
+            <li>Multiple login attempts</li>
+            <li>Browser settings blocking cookies</li>
+          </ul>
+          <p><a href="/">Try logging in again</a></p>
+        `);
       }
 
+      // Exchange the authorization code for tokens
       const tokenResponse = await fetch(
         "https://accounts.spotify.com/api/token",
         {
@@ -265,17 +347,27 @@ async function startServer(): Promise<void> {
         Date.now() + tokenData.expires_in * 1000
       ).toISOString(); // Use ISO format instead of locale string
 
-      // Store tokens using Redis
-      await tokenStorage.saveTokens(tokenData);
+      // Store tokens using Redis if available, otherwise fall back to file
+      if (redisAvailable) {
+        await tokenStorage.saveTokens(tokenData);
+      } else {
+        // Fallback to file storage
+        const tokensFilename = config.isProduction
+          ? ".spotify-tokens-prod.json"
+          : ".spotify-tokens-dev.json";
+        fs.writeFileSync(
+          tokensFilename,
+          JSON.stringify(tokenData, null, 2),
+          "utf8"
+        );
+      }
 
       // Store authentication status in session
-      req.session.isAuthenticated = true;
-      req.session.expiresAt = tokenData.expires_at;
+      (req.session as any).isAuthenticated = true;
+      (req.session as any).expiresAt = tokenData.expires_at;
 
       // Store user ID in session if needed later for multi-user support
-      // We'll add a placeholder for now - in a multi-user system you'd
-      // fetch the user ID from Spotify here
-      req.session.userId = "default";
+      (req.session as any).userId = "default";
 
       console.log(`Token obtained successfully, redirecting to playlists page`);
 
@@ -290,32 +382,72 @@ async function startServer(): Promise<void> {
   // API endpoint to get user playlists - Enhanced with Redis
   app.get("/api/playlists", async (req: Request, res: Response) => {
     try {
-      // Check rate limits first
-      const rateCheck = await rateLimiter.checkLimit("/me/playlists");
-      if (!rateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded",
-          resetAt: rateCheck.resetTime,
-          limit: rateCheck.limit,
-        });
-      }
+      if (redisAvailable) {
+        // Check rate limits first
+        const rateCheck = await rateLimiter.checkLimit("/me/playlists");
+        if (!rateCheck.allowed) {
+          return res.status(429).json({
+            error: "Rate limit exceeded",
+            resetAt: rateCheck.resetTime,
+            limit: rateCheck.limit,
+          });
+        }
 
-      // Get pagination parameters
-      const offset = parseInt(req.query.offset as string) || 0;
-      const limit = parseInt(req.query.limit as string) || 20;
+        // Get pagination parameters
+        const offset = parseInt(req.query.offset as string) || 0;
+        const limit = parseInt(req.query.limit as string) || 20;
 
-      // Use our Spotify client with built-in caching
-      try {
-        const playlistsData = await spotifyClient.getCurrentUserPlaylists(
-          offset,
-          limit
-        );
-        res.json(playlistsData);
-      } catch (error: any) {
-        if (error.message.includes("No authentication tokens")) {
+        // Use our Spotify client with built-in caching
+        try {
+          const playlistsData = await spotifyClient.getCurrentUserPlaylists(
+            offset,
+            limit
+          );
+          return res.json(playlistsData);
+        } catch (error: any) {
+          if (error.message.includes("No authentication tokens")) {
+            return res.status(401).json({ error: "Not authenticated" });
+          }
+          throw error;
+        }
+      } else {
+        // Fallback to original implementation without Redis
+        const tokens = getTokensFromFile();
+
+        if (!tokens) {
           return res.status(401).json({ error: "Not authenticated" });
         }
-        throw error;
+
+        // Check if token is expired
+        const now = new Date();
+        const expiresAt = new Date(tokens.expires_at);
+
+        if (now > expiresAt) {
+          return res.status(401).json({ error: "Token expired" });
+        }
+
+        // Get pagination parameters
+        const offset = parseInt(req.query.offset as string) || 0;
+        const limit = parseInt(req.query.limit as string) || 20;
+
+        const playlistsResponse = await fetch(
+          `https://api.spotify.com/v1/me/playlists?offset=${offset}&limit=${limit}`,
+          {
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+            },
+          }
+        );
+
+        if (!playlistsResponse.ok) {
+          return res.status(playlistsResponse.status).json({
+            error: "Failed to fetch playlists",
+          });
+        }
+
+        const playlistsData: SpotifyPlaylistsResponse =
+          (await playlistsResponse.json()) as SpotifyPlaylistsResponse;
+        return res.json(playlistsData);
       }
     } catch (error) {
       console.error("Error fetching playlists:", error);
@@ -326,25 +458,50 @@ async function startServer(): Promise<void> {
   // API endpoint to get current user profile - Enhanced with Redis
   app.get("/api/user", async (req: Request, res: Response) => {
     try {
-      // Check rate limits first
-      const rateCheck = await rateLimiter.checkLimit("/me");
-      if (!rateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded",
-          resetAt: rateCheck.resetTime,
-          limit: rateCheck.limit,
-        });
-      }
+      if (redisAvailable) {
+        // Check rate limits first
+        const rateCheck = await rateLimiter.checkLimit("/me");
+        if (!rateCheck.allowed) {
+          return res.status(429).json({
+            error: "Rate limit exceeded",
+            resetAt: rateCheck.resetTime,
+            limit: rateCheck.limit,
+          });
+        }
 
-      // Use our Spotify client with built-in caching
-      try {
-        const userData = await spotifyClient.getCurrentUser();
-        res.json(userData);
-      } catch (error: any) {
-        if (error.message.includes("No authentication tokens")) {
+        // Use our Spotify client with built-in caching
+        try {
+          const userData = await spotifyClient.getCurrentUser();
+          return res.json(userData);
+        } catch (error: any) {
+          if (error.message.includes("No authentication tokens")) {
+            return res.status(401).json({ error: "Not authenticated" });
+          }
+          throw error;
+        }
+      } else {
+        // Fallback to original implementation without Redis
+        const tokens = getTokensFromFile();
+
+        if (!tokens) {
           return res.status(401).json({ error: "Not authenticated" });
         }
-        throw error;
+
+        const userResponse = await fetch("https://api.spotify.com/v1/me", {
+          headers: {
+            Authorization: `Bearer ${tokens.access_token}`,
+          },
+        });
+
+        if (!userResponse.ok) {
+          return res.status(userResponse.status).json({
+            error: "Failed to fetch user profile",
+          });
+        }
+
+        const userData: SpotifyUser =
+          (await userResponse.json()) as SpotifyUser;
+        return res.json(userData);
       }
     } catch (error) {
       console.error("Error fetching user profile:", error);
@@ -352,25 +509,36 @@ async function startServer(): Promise<void> {
     }
   });
 
-  // Check auth status - using Redis token storage
+  // Check auth status - using Redis token storage if available
   app.get("/api/auth-status", async (req: Request, res: Response) => {
     try {
       // First check session
-      if (req.session.isAuthenticated && req.session.expiresAt) {
+      if (
+        (req.session as any).isAuthenticated &&
+        (req.session as any).expiresAt
+      ) {
         const now = Date.now();
         const expiresAt =
-          new Date(req.session.expiresAt).getTime() + 5 * 60 * 1000; // 5 min buffer
+          new Date((req.session as any).expiresAt).getTime() + 5 * 60 * 1000; // 5 min buffer
 
         if (now < expiresAt) {
           return res.json({
             authenticated: true,
-            expiresAt: req.session.expiresAt,
+            expiresAt: (req.session as any).expiresAt,
           });
         }
       }
 
-      // Fallback to token storage
-      const tokens = await tokenStorage.getTokens();
+      // Get tokens from appropriate source
+      let tokens: TokenData | null;
+
+      if (redisAvailable) {
+        // Get from Redis
+        tokens = await tokenStorage.getTokens();
+      } else {
+        // Fallback to file
+        tokens = getTokensFromFile();
+      }
 
       if (!tokens) {
         const response: AuthStatusResponse = { authenticated: false };
@@ -378,16 +546,18 @@ async function startServer(): Promise<void> {
       }
 
       // Check if token is expired
-      const isExpired = tokenStorage.isTokenExpired(tokens);
+      const now = Date.now();
+      const expiresAt = new Date(tokens.expires_at).getTime() + 5 * 60 * 1000;
+      const isAuthenticated = now < expiresAt;
 
       // Update session if authenticated via token
-      if (!isExpired && req.session) {
-        req.session.isAuthenticated = true;
-        req.session.expiresAt = tokens.expires_at;
+      if (isAuthenticated && req.session) {
+        (req.session as any).isAuthenticated = true;
+        (req.session as any).expiresAt = tokens.expires_at;
       }
 
       const response: AuthStatusResponse = {
-        authenticated: !isExpired,
+        authenticated: isAuthenticated,
         expiresAt: tokens.expires_at,
       };
 
@@ -401,11 +571,17 @@ async function startServer(): Promise<void> {
     }
   });
 
-  // API endpoint to refresh the token - using Redis token storage
+  // API endpoint to refresh the token - using Redis token storage if available
   app.post("/api/refresh-token", async (req: Request, res: Response) => {
     try {
       // Get current tokens
-      const tokens = await tokenStorage.getTokens();
+      let tokens: TokenData | null;
+
+      if (redisAvailable) {
+        tokens = await tokenStorage.getTokens();
+      } else {
+        tokens = getTokensFromFile();
+      }
 
       if (!tokens || !tokens.refresh_token) {
         return res.status(401).json({ error: "No refresh token available" });
@@ -449,12 +625,24 @@ async function startServer(): Promise<void> {
 
       // Update session expiration
       if (req.session) {
-        req.session.isAuthenticated = true;
-        req.session.expiresAt = newTokenData.expires_at;
+        (req.session as any).isAuthenticated = true;
+        (req.session as any).expiresAt = newTokenData.expires_at;
       }
 
-      // Save updated tokens using Redis
-      await tokenStorage.saveTokens(newTokenData);
+      // Save tokens to appropriate storage
+      if (redisAvailable) {
+        await tokenStorage.saveTokens(newTokenData);
+      } else {
+        // Fallback to file storage
+        const tokensFilename = config.isProduction
+          ? ".spotify-tokens-prod.json"
+          : ".spotify-tokens-dev.json";
+        fs.writeFileSync(
+          tokensFilename,
+          JSON.stringify(newTokenData, null, 2),
+          "utf8"
+        );
+      }
 
       res.json({ success: true });
     } catch (error) {
@@ -463,6 +651,7 @@ async function startServer(): Promise<void> {
     }
   });
 
+  // Logout endpoint
   app.get("/api/logout", async (req: Request, res: Response) => {
     try {
       // Clear session
@@ -474,11 +663,22 @@ async function startServer(): Promise<void> {
         });
       }
 
-      // Remove tokens from Redis store
-      await tokenStorage.removeTokens();
+      if (redisAvailable) {
+        // Remove tokens from Redis store
+        await tokenStorage.removeTokens();
 
-      // Clear user's API cache
-      await apiCache.clearUserCache();
+        // Clear user's API cache
+        await apiCache.clearUserCache();
+      } else {
+        // Fallback to file removal
+        const tokensFilename = config.isProduction
+          ? ".spotify-tokens-prod.json"
+          : ".spotify-tokens-dev.json";
+
+        if (fs.existsSync(tokensFilename)) {
+          fs.unlinkSync(tokensFilename);
+        }
+      }
 
       // Send a success response
       res.json({ success: true, message: "Logged out successfully" });
@@ -493,59 +693,139 @@ async function startServer(): Promise<void> {
     console.log("User-data endpoint called");
 
     try {
-      // Check rate limits first - this counts as multiple API requests
-      const userRateCheck = await rateLimiter.checkLimit("/me");
-      const playlistsRateCheck = await rateLimiter.checkLimit("/me/playlists");
+      if (redisAvailable) {
+        // Check rate limits first - this counts as multiple API requests
+        const userRateCheck = await rateLimiter.checkLimit("/me");
+        const playlistsRateCheck = await rateLimiter.checkLimit(
+          "/me/playlists"
+        );
 
-      if (!userRateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded for user profile",
-          resetAt: userRateCheck.resetTime,
-          limit: userRateCheck.limit,
-        });
-      }
+        if (!userRateCheck.allowed) {
+          return res.status(429).json({
+            error: "Rate limit exceeded for user profile",
+            resetAt: userRateCheck.resetTime,
+            limit: userRateCheck.limit,
+          });
+        }
 
-      if (!playlistsRateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded for playlists",
-          resetAt: playlistsRateCheck.resetTime,
-          limit: playlistsRateCheck.limit,
-        });
-      }
+        if (!playlistsRateCheck.allowed) {
+          return res.status(429).json({
+            error: "Rate limit exceeded for playlists",
+            resetAt: playlistsRateCheck.resetTime,
+            limit: playlistsRateCheck.limit,
+          });
+        }
 
-      // Try to get from cache first
-      const cachedData = await apiCache.get("/api/user-data", {});
-      if (cachedData) {
-        console.log("Using cached user-data response");
-        return res.json(cachedData);
-      }
+        // Try to get from cache first
+        const cachedData = await apiCache.get("/api/user-data", {});
+        if (cachedData) {
+          console.log("Using cached user-data response");
+          return res.json(cachedData);
+        }
 
-      // Fetch user data using our Spotify client
-      try {
-        // Fetch both user profile and playlists in parallel
-        const [userData, playlistsData] = await Promise.all([
-          spotifyClient.getCurrentUser(),
-          spotifyClient.getCurrentUserPlaylists(0, 20),
-        ]);
+        // Fetch user data using our Spotify client
+        try {
+          // Fetch both user profile and playlists in parallel
+          const [userData, playlistsData] = await Promise.all([
+            spotifyClient.getCurrentUser(),
+            spotifyClient.getCurrentUserPlaylists(0, 20),
+          ]);
 
-        // Combine the data
-        const combinedData = {
-          user: userData,
-          playlists: playlistsData,
-        };
+          // Combine the data
+          const combinedData = {
+            user: userData,
+            playlists: playlistsData,
+          };
 
-        // Cache the combined response
-        await apiCache.set("/api/user-data", {}, combinedData);
+          // Cache the combined response
+          await apiCache.set("/api/user-data", {}, combinedData);
 
-        // Return combined data
-        res.json(combinedData);
-        console.log("User-data: Response sent successfully");
-      } catch (error: any) {
-        if (error.message.includes("No authentication tokens")) {
+          // Return combined data
+          res.json(combinedData);
+          console.log("User-data: Response sent successfully");
+        } catch (error: any) {
+          if (error.message.includes("No authentication tokens")) {
+            console.log("User-data: Not authenticated (no tokens)");
+            return res.status(401).json({ error: "Not authenticated" });
+          }
+          throw error;
+        }
+      } else {
+        // Fallback to original implementation without Redis
+        const tokens = getTokensFromFile();
+
+        if (!tokens) {
           console.log("User-data: Not authenticated (no tokens)");
           return res.status(401).json({ error: "Not authenticated" });
         }
-        throw error;
+
+        // Check if token is expired
+        const now = new Date();
+        const expiresAt = new Date(tokens.expires_at);
+
+        if (now > expiresAt) {
+          console.log("User-data: Token expired");
+          return res.status(401).json({ error: "Token expired" });
+        }
+
+        // Fetch user profile
+        console.log("User-data: Fetching user profile from Spotify API");
+        const userResponse = await fetch("https://api.spotify.com/v1/me", {
+          headers: {
+            Authorization: `Bearer ${tokens.access_token}`,
+          },
+        });
+
+        if (!userResponse.ok) {
+          const errorText = await userResponse.text();
+          console.error(
+            `User-data: Failed to fetch user profile: ${userResponse.status} - ${errorText}`
+          );
+          return res.status(userResponse.status).json({
+            error: "Failed to fetch user profile",
+            details: errorText,
+          });
+        }
+
+        const userData: SpotifyUser =
+          (await userResponse.json()) as SpotifyUser;
+        console.log(`User-data: User profile fetched for ${userData.id}`);
+
+        // Fetch playlists
+        console.log("User-data: Fetching playlists from Spotify API");
+        const playlistsResponse = await fetch(
+          "https://api.spotify.com/v1/me/playlists",
+          {
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+            },
+          }
+        );
+
+        if (!playlistsResponse.ok) {
+          const errorText = await playlistsResponse.text();
+          console.error(
+            `User-data: Failed to fetch playlists: ${playlistsResponse.status} - ${errorText}`
+          );
+          return res.status(playlistsResponse.status).json({
+            error: "Failed to fetch playlists",
+            details: errorText,
+          });
+        }
+
+        const playlistsData: SpotifyPlaylistsResponse =
+          (await playlistsResponse.json()) as SpotifyPlaylistsResponse;
+        console.log(
+          `User-data: ${playlistsData.items.length} playlists fetched`
+        );
+
+        // Return combined data
+        res.json({
+          user: userData,
+          playlists: playlistsData,
+        });
+
+        console.log("User-data: Response sent successfully");
       }
     } catch (error: any) {
       console.error("Error fetching user data:", error);
@@ -553,132 +833,198 @@ async function startServer(): Promise<void> {
     }
   });
 
-  // New endpoint to get a specific playlist
-  app.get("/api/playlists/:id", async (req: Request, res: Response) => {
-    try {
-      const playlistId = req.params.id;
-
-      // Check rate limits
-      const rateCheck = await rateLimiter.checkLimit(
-        `/playlists/${playlistId}`
-      );
-      if (!rateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded",
-          resetAt: rateCheck.resetTime,
-          limit: rateCheck.limit,
-        });
-      }
-
-      // Fetch playlist with caching
+  // Redis-dependent routes - only add if Redis is available
+  if (redisAvailable) {
+    // New endpoint to get a specific playlist
+    app.get("/api/playlists/:id", async (req: Request, res: Response) => {
       try {
-        const playlist = await spotifyClient.getPlaylist(playlistId);
-        res.json(playlist);
-      } catch (error: any) {
-        if (error.message.includes("No authentication tokens")) {
-          return res.status(401).json({ error: "Not authenticated" });
-        }
-        throw error;
-      }
-    } catch (error) {
-      console.error("Error fetching playlist:", error);
-      res.status(500).json({ error: "Server error" });
-    }
-  });
+        const playlistId = req.params.id;
 
-  // New endpoint to get tracks from a playlist
-  app.get("/api/playlists/:id/tracks", async (req: Request, res: Response) => {
-    try {
-      const playlistId = req.params.id;
-      const offset = parseInt(req.query.offset as string) || 0;
-      const limit = parseInt(req.query.limit as string) || 100;
-
-      // Check rate limits
-      const rateCheck = await rateLimiter.checkLimit(
-        `/playlists/${playlistId}/tracks`
-      );
-      if (!rateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded",
-          resetAt: rateCheck.resetTime,
-          limit: rateCheck.limit,
-        });
-      }
-
-      // Fetch tracks with caching
-      try {
-        const tracks = await spotifyClient.getPlaylistTracks(
-          playlistId,
-          offset,
-          limit
+        // Check rate limits
+        const rateCheck = await rateLimiter.checkLimit(
+          `/playlists/${playlistId}`
         );
-        res.json(tracks);
-      } catch (error: any) {
-        if (error.message.includes("No authentication tokens")) {
-          return res.status(401).json({ error: "Not authenticated" });
+        if (!rateCheck.allowed) {
+          return res.status(429).json({
+            error: "Rate limit exceeded",
+            resetAt: rateCheck.resetTime,
+            limit: rateCheck.limit,
+          });
         }
-        throw error;
+
+        // Fetch playlist with caching
+        try {
+          const playlist = await spotifyClient.getPlaylist(playlistId);
+          res.json(playlist);
+        } catch (error: any) {
+          if (error.message.includes("No authentication tokens")) {
+            return res.status(401).json({ error: "Not authenticated" });
+          }
+          throw error;
+        }
+      } catch (error) {
+        console.error("Error fetching playlist:", error);
+        res.status(500).json({ error: "Server error" });
       }
-    } catch (error) {
-      console.error("Error fetching playlist tracks:", error);
-      res.status(500).json({ error: "Server error" });
-    }
+    });
+
+    // New endpoint to get tracks from a playlist
+    app.get(
+      "/api/playlists/:id/tracks",
+      async (req: Request, res: Response) => {
+        try {
+          const playlistId = req.params.id;
+          const offset = parseInt(req.query.offset as string) || 0;
+          const limit = parseInt(req.query.limit as string) || 100;
+
+          // Check rate limits
+          const rateCheck = await rateLimiter.checkLimit(
+            `/playlists/${playlistId}/tracks`
+          );
+          if (!rateCheck.allowed) {
+            return res.status(429).json({
+              error: "Rate limit exceeded",
+              resetAt: rateCheck.resetTime,
+              limit: rateCheck.limit,
+            });
+          }
+
+          // Fetch tracks with caching
+          try {
+            const tracks = await spotifyClient.getPlaylistTracks(
+              playlistId,
+              offset,
+              limit
+            );
+            res.json(tracks);
+          } catch (error: any) {
+            if (error.message.includes("No authentication tokens")) {
+              return res.status(401).json({ error: "Not authenticated" });
+            }
+            throw error;
+          }
+        } catch (error) {
+          console.error("Error fetching playlist tracks:", error);
+          res.status(500).json({ error: "Server error" });
+        }
+      }
+    );
+
+    // New endpoint to search Spotify
+    app.get("/api/search", async (req: Request, res: Response) => {
+      try {
+        const query = req.query.q as string;
+        const type = req.query.type as string;
+        const offset = parseInt(req.query.offset as string) || 0;
+        const limit = parseInt(req.query.limit as string) || 20;
+
+        if (!query || !type) {
+          return res
+            .status(400)
+            .json({ error: "Missing query or type parameter" });
+        }
+
+        // Check rate limits
+        const rateCheck = await rateLimiter.checkLimit("/search");
+        if (!rateCheck.allowed) {
+          return res.status(429).json({
+            error: "Rate limit exceeded",
+            resetAt: rateCheck.resetTime,
+            limit: rateCheck.limit,
+          });
+        }
+
+        // Perform search with caching
+        try {
+          const results = await spotifyClient.search(
+            query,
+            type,
+            limit,
+            offset
+          );
+          res.json(results);
+        } catch (error: any) {
+          if (error.message.includes("No authentication tokens")) {
+            return res.status(401).json({ error: "Not authenticated" });
+          }
+          throw error;
+        }
+      } catch (error) {
+        console.error("Error searching Spotify:", error);
+        res.status(500).json({ error: "Server error" });
+      }
+    });
+  }
+
+  // Health check endpoint that doesn't require Redis
+  app.get("/health", (req: Request, res: Response) => {
+    const healthData = {
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      redis: {
+        available: redisAvailable,
+        secureState: secureStateManager.getRedisStatus(),
+        tokenStorage: tokenStorage.getRedisStatus(),
+        apiCache: apiCache.getRedisStatus(),
+        rateLimiter: rateLimiter.getRedisStatus(),
+      },
+      uptime: process.uptime(),
+    };
+
+    res.json(healthData);
   });
 
-  // New endpoint to search Spotify
-  app.get("/api/search", async (req: Request, res: Response) => {
-    try {
-      const query = req.query.q as string;
-      const type = req.query.type as string;
-      const offset = parseInt(req.query.offset as string) || 0;
-      const limit = parseInt(req.query.limit as string) || 20;
+  // Add these methods to each of your Redis utilities
+  // For example, in secureStateManager.ts:
 
-      if (!query || !type) {
-        return res
-          .status(400)
-          .json({ error: "Missing query or type parameter" });
-      }
+  // Serve index.html for client-side routing
+  app.get(["/", "/playlists"], (req: Request, res: Response) => {
+    res.sendFile(path.join(__dirname, "..", "public", "index.html"));
+  });
 
-      // Check rate limits
-      const rateCheck = await rateLimiter.checkLimit("/search");
-      if (!rateCheck.allowed) {
-        return res.status(429).json({
-          error: "Rate limit exceeded",
-          resetAt: rateCheck.resetTime,
-          limit: rateCheck.limit,
-        });
-      }
+  console.log("Setting up routes completed");
+  console.log("Starting HTTP server...");
 
-      // Perform search with caching
-      try {
-        const results = await spotifyClient.search(query, type, limit, offset);
-        res.json(results);
-      } catch (error: any) {
-        if (error.message.includes("No authentication tokens")) {
-          return res.status(401).json({ error: "Not authenticated" });
-        }
-        throw error;
-      }
-    } catch (error) {
-      console.error("Error searching Spotify:", error);
-      res.status(500).json({ error: "Server error" });
-    }
+  const host = config.isProduction ? "0.0.0.0" : "localhost";
+
+  const server = app.listen(config.port, host, () => {
+    console.log(`Server running at http://${host}:${config.port}`);
+    if (!config.isProduction) open(`http://localhost:${config.port}`);
+  });
+
+  // Add timeout handling
+  server.setTimeout(30000); // 30 second timeout
+
+  // Add error handler for the server
+  server.on("error", (error) => {
+    console.error("Server error:", error);
+  });
+
+  // Optional: Add connection tracking (useful for debugging connection issues)
+  server.on("connection", () => {
+    console.log("New connection established");
   });
 
   // Handle graceful shutdown to close Redis connections
   process.on("SIGINT", async () => {
     console.log("Shutting down gracefully...");
 
-    // Close all Redis connections
-    await Promise.all([
-      tokenStorage.close(),
-      apiCache.close(),
-      rateLimiter.close(),
-    ]).catch((err) => console.error("Error closing Redis connections:", err));
+    if (redisAvailable) {
+      // Close all Redis connections
+      await Promise.all([
+        tokenStorage.close && tokenStorage.close(),
+        apiCache.close && apiCache.close(),
+        rateLimiter.close && rateLimiter.close(),
+      ]).catch((err) => console.error("Error closing Redis connections:", err));
 
-    console.log("Redis connections closed.");
+      console.log("Redis connections closed.");
+    }
+
     process.exit(0);
   });
+
+  // Return the server instance
+  return server;
 }
 
 // Execute the function
