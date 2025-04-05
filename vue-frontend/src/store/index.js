@@ -1,3 +1,5 @@
+// File: src/store/index.js
+
 import { createStore } from "vuex";
 import SpotifyService from "../services/spotify";
 

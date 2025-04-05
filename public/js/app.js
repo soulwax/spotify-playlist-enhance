@@ -1,4 +1,4 @@
-// File: public/js/app.js
+// File (old): public/js/app.js
 
 // DOM Elements
 const loginPage = document.getElementById("loginPage");

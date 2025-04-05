@@ -1,0 +1,15 @@
+├───package-lock.json
+├───package.json
+├───components
+│   ├───AppHeader.vue
+│   ├───LoadingSpinner.vue
+│   ├───LoginPage.vue
+│   └───PlaylistCard.vue
+└───src
+    ├───App.vue
+    ├───main.js
+    ├───router.js
+    ├───services
+    │   └───spotify.js
+    └───store
+        └───index.js
