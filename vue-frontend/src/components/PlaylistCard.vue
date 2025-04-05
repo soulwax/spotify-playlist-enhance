@@ -1,3 +1,5 @@
+<!-- File: src/components/PlaylistCard.vue -->
+
 <template>
   <div class="playlist-card">
     <a

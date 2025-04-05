@@ -1,3 +1,5 @@
+<!-- File: src/components/LoginPage.vue -->
+
 <template>
   <section class="page">
     <div class="login-container">

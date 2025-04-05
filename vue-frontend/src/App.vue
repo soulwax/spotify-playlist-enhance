@@ -1,3 +1,5 @@
+<!-- File: src/App.vue -->
+
 <template>
   <div class="app-container">
     <AppHeader />
