@@ -7,7 +7,6 @@
         "christian-kohler.npm-intellisense",
         "mongodb.mongodb-vscode",
         "mikestead.dotenv",
-        "streetsidesoftware.code-spell-checker",
         "yoavbls.pretty-ts-errors"
     ]
 }
