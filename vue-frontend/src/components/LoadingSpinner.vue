@@ -1,3 +1,5 @@
+<!-- File: src/components/LoadingSpinner.vue -->
+
 <template>
   <div :class="containerClass">
     <div class="loading-spinner"></div>

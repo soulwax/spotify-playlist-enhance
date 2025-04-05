@@ -1,3 +1,5 @@
+<!-- File: src/components/AppHeader.vue -->
+
 <template>
   <header>
     <div class="header-content">
